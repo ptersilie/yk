@@ -4,5 +4,6 @@ members=[
     "ykrt",
     "yktrace",
     "tiri",
-    "ykcompile"
+    "ykcompile",
+    "assembler"
 ]
