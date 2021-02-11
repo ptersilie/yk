@@ -405,9 +405,6 @@ impl Location {
 
     /// Apply an offset to the location, returning a new one.
     fn offset(self, off: OffT) -> Self {
-        if off == 0 {
-            return self;
-        }
         match self {
             Location::Mem(ro) => Location::Mem(RegAndOffset {
                 reg: ro.reg,
@@ -417,7 +414,11 @@ impl Location {
                 ptr,
                 off: ind_off + off,
             },
-            Location::Reg(..) | Location::Const { .. } => todo!("offsetting a constant"),
+            Location::Reg(..) => {
+                assert!(off == 0);
+                self
+            },
+            Location::Const { .. } => todo!("offsetting a constant"),
         }
     }
 
