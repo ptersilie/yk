@@ -335,6 +335,8 @@ extern "C" void *__ykllvmwrap_irtrace_compile(char *FuncNames[], size_t BBs[],
     std::advance(It, BBs[Idx]);
     BasicBlock *BB = &*It;
 
+    bool increment_after = false;
+
     // Iterate over all instructions within this block and copy them over
     // to our new module.
     for (auto I = BB->begin(); I != BB->end(); I++) {
@@ -345,36 +347,37 @@ extern "C" void *__ykllvmwrap_irtrace_compile(char *FuncNames[], size_t BBs[],
         if (&*I == last_call) {
           last_call = nullptr;
         }
-        //errs() << "Skip until last call: ";
-        //I->dump();
+        errs() << "Skip until last call " << FuncName << ": ";
+        I->dump();
         continue;
       }
 
-      if (inline_stack_count > 0) {
-        if (isa<CallInst>(I)) {
-          CallInst *CI = cast<CallInst>(&*I);
-          Function *CF = CI->getCalledFunction();
-          Function *AOTF = AOTMod->getFunction(CF->getName());
-          if (AOTF != nullptr && AOTF->getLinkage() != GlobalValue::ExternalLinkage) {
-            inlined_calls.push_back(CI);
-            inline_stack_count += 1;
-            I->dump();
-            errs() << "ISC: " << inline_stack_count << "\n";
-          }
-        }
+      //if (inline_stack_count > 0) {
+      //  if (isa<CallInst>(I)) {
+      //    CallInst *CI = cast<CallInst>(&*I);
+      //    Function *CF = CI->getCalledFunction();
+      //    Function *AOTF = AOTMod->getFunction(CF->getName());
+      //    if (AOTF != nullptr && AOTF->getLinkage() != GlobalValue::ExternalLinkage) {
+      //      inlined_calls.push_back(CI);
+      //      inline_stack_count += 1;
+      //      I->dump();
+      //      errs() << "ISC: " << inline_stack_count << "\n";
+      //      // XXX This also needs to skip the remainder of the block!!!
+      //    }
+      //  }
 
-        if (isa<ReturnInst>(I)) {
-          inline_stack_count -= 1;
-          last_call = inlined_calls.back();
-          inlined_calls.pop_back();
-          I->dump();
-          errs() << "ISC: " << inline_stack_count << "\n";
-        }
-      }
+      //  if (isa<ReturnInst>(I)) {
+      //    inline_stack_count -= 1;
+      //    last_call = inlined_calls.back();
+      //    inlined_calls.pop_back();
+      //    I->dump();
+      //    errs() << "ISC: " << inline_stack_count << "\n";
+      //  }
+      //}
 
-      if (inline_stack_count > 0) {
-        continue;
-      }
+      //if (inline_stack_count > 0) {
+      //  continue;
+      //}
 
       // Skip calls to debug intrinsics (e.g. @llvm.dbg.value). We don't
       // currently handle debug info and these "pseudo-calls" cause our blocks
@@ -396,12 +399,13 @@ extern "C" void *__ykllvmwrap_irtrace_compile(char *FuncNames[], size_t BBs[],
           break;
         } else if (AOTMod->getFunction(CF->getName()) != nullptr) {
           // We have IR for this function.
-          bool finline = true;
+          if (inline_stack_count > 0)
+            inline_stack_count += 1;
           for (CallInst *cinst : inlined_calls) {
             // Have we inlined this call already? Then this is recursion.
             if (cinst->getCalledFunction() == CF) {
               inlined_calls.push_back(CI);
-              inline_stack_count = 1;
+              increment_after = true;
               errs() << "Don't inline: ";
               I->dump();
               // Don't inline this function again and leave the call intact.
@@ -420,7 +424,6 @@ extern "C" void *__ykllvmwrap_irtrace_compile(char *FuncNames[], size_t BBs[],
                       }
                   }
               }
-              finline = false;
               break;
             }
           }
@@ -428,12 +431,13 @@ extern "C" void *__ykllvmwrap_irtrace_compile(char *FuncNames[], size_t BBs[],
           // can continue tracing from this position after returning from the
           // inlined call.
           // FIXME Deal with calls we cannot or don't want to inline.
-          if (StartTracingInstr != nullptr && finline) {
+          if (StartTracingInstr != nullptr) {
             errs() << "Rewrite args:";
             I->dump();
             inlined_calls.push_back(CI);
             // During inlining, remap function arguments to the variables
             // passed in by the caller.
+            if (inline_stack_count == 0 && !increment_after) {
             for (unsigned int i = 0; i < CI->arg_size(); i++) {
               Value *Var = CI->getArgOperand(i);
               Value *Arg = CF->getArg(i);
@@ -443,7 +447,10 @@ extern "C" void *__ykllvmwrap_irtrace_compile(char *FuncNames[], size_t BBs[],
                 Var = VMap[Var];
               VMap[Arg] = Var;
             }
+            }
+            if (!increment_after) {
             break;
+            }
           }
         } else {
           // We don't have IR for this function.
@@ -461,7 +468,7 @@ extern "C" void *__ykllvmwrap_irtrace_compile(char *FuncNames[], size_t BBs[],
       }
 
       if (isa<ReturnInst>(I)) {
-        errs() << "Remap return";
+        errs() << "Remap return " << inline_stack_count << " : ";
         I->dump();
         last_call = inlined_calls.back();
         inlined_calls.pop_back();
@@ -469,6 +476,7 @@ extern "C" void *__ykllvmwrap_irtrace_compile(char *FuncNames[], size_t BBs[],
         // Replace the return variable of the call with its return value.
         // Since the return value will have already been copied over to the
         // JITModule, make sure we look up the copy.
+        if (inline_stack_count == 0) {
         auto OldRetVal = ((ReturnInst *)&*I)->getReturnValue();
         if (isa<Constant>(OldRetVal)) {
           errs() << "Constant";
@@ -476,15 +484,24 @@ extern "C" void *__ykllvmwrap_irtrace_compile(char *FuncNames[], size_t BBs[],
         } else {
           OldRetVal->dump();
           auto NewRetVal = VMap[OldRetVal];
-          errs() << "bla";
-          NewRetVal->dump();
-          errs() << "bla";
+          errs() << "bla\n";
+          NewRetVal->dump(); // ERROR! That's why we don't see rest of main.
+          errs() << "bla\n";
           last_call->dump();
+          errs() << "Here?\n";
           VMap[last_call] = NewRetVal;
         }
+        }
+        inline_stack_count -= 1;
         break;
       }
 
+      if (inline_stack_count > 0) {
+          errs() << "Skip: ";
+          I->dump();
+        continue;
+      }
+      
       errs() << "Add: ";
       I->dump();
       // If execution reaches here, then the instruction I is to be copied into
