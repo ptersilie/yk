@@ -404,7 +404,7 @@ extern "C" void *__ykllvmwrap_irtrace_compile(char *FuncNames[], size_t BBs[],
           for (CallInst *cinst : inlined_calls) {
             // Have we inlined this call already? Then this is recursion.
             if (cinst->getCalledFunction() == CF) {
-              inlined_calls.push_back(CI);
+              //inlined_calls.push_back(CI);
               increment_after = true;
               errs() << "Don't inline: ";
               I->dump();
@@ -492,7 +492,9 @@ extern "C" void *__ykllvmwrap_irtrace_compile(char *FuncNames[], size_t BBs[],
           VMap[last_call] = NewRetVal;
         }
         }
+        if (inline_stack_count > 0) {
         inline_stack_count -= 1;
+        }
         break;
       }
 
@@ -593,6 +595,12 @@ extern "C" void *__ykllvmwrap_irtrace_compile(char *FuncNames[], size_t BBs[],
 
       // And finally insert the new instruction into the JIT module.
       Builder.Insert(NewInst);
+
+      if (increment_after) {
+        increment_after = false;
+        inline_stack_count = 1;
+        break;
+      }
     }
   }
   Builder.CreateRetVoid();
