@@ -8,8 +8,10 @@ use memmap2;
 use object::{Object, ObjectSection};
 use once_cell::sync::Lazy;
 use std::{
+    collections::HashMap,
     convert::TryFrom,
     env, fs,
+    ffi::CString,
     io::{prelude::*, Cursor, SeekFrom},
 };
 use ykllvmwrap::symbolizer::Symbolizer;
@@ -91,17 +93,19 @@ impl BlockMap {
 
 pub struct HWTMapper {
     symb: Symbolizer,
+    faddrs: HashMap<CString, u64>,
 }
 
 impl HWTMapper {
     pub(super) fn new() -> HWTMapper {
         Self {
             symb: Symbolizer::new(),
+            faddrs: HashMap::new(),
         }
     }
 
     /// Maps each entry of a hardware trace back the IR block from whence it was compiled.
-    pub(super) fn map_trace(&self, trace: Box<dyn Trace>) -> Result<Vec<IRBlock>, HWTracerError> {
+    pub(super) fn map_trace(mut self, trace: Box<dyn Trace>) -> Result<(Vec<IRBlock>, HashMap<CString, u64>), HWTracerError> {
         let mut ret_irblocks = Vec::new();
         let mut itr = trace.iter_blocks();
         while let Some(block) = itr.next() {
@@ -118,7 +122,7 @@ impl HWTMapper {
         // unmappable blocks in the middle of the trace and something is wrong.
         debug_assert!(itr.all(|block| self.map_block(&block.unwrap()).is_empty()));
 
-        Ok(ret_irblocks)
+        Ok((ret_irblocks, self.faddrs))
     }
 
     /// Maps one PT block to one or many LLVM IR blocks.
@@ -136,7 +140,7 @@ impl HWTMapper {
     /// During codegen LLVM may remove the unconditional jump and simply place bb1 and bb2
     /// consecutively, allowing bb1 to fall-thru to bb2. In the eyes of the PT block decoder, a
     /// fall-thru does not terminate a block, so whereas LLVM sees two blocks, PT sees only one.
-    fn map_block(&self, block: &hwtracer::Block) -> Vec<IRBlock> {
+    fn map_block(&mut self, block: &hwtracer::Block) -> Vec<IRBlock> {
         let block_vaddr = block.first_instr();
         let (obj_name, block_off) = code_vaddr_to_off(block_vaddr as usize).unwrap();
         let block_len = block.last_instr() - block_vaddr;
@@ -167,10 +171,12 @@ impl HWTMapper {
             }
 
             let func_name = self.symb.find_code_sym(obj_name, ent.value.f_off).unwrap();
+            let fname = func_name.clone();
             ret.push(IRBlock {
                 func_name,
                 bb: usize::try_from(ent.value.bb).unwrap(),
             });
+            self.faddrs.insert(fname, ent.value.f_off);
         }
         ret
     }

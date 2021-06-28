@@ -47,6 +47,7 @@ fn mk_compiler(exe: &Path, src: &Path, opt: &str) -> Command {
         exe.to_str().unwrap(),
         src.to_str().unwrap(),
     ]);
+    dbg!(&compiler);
     compiler
 }
 

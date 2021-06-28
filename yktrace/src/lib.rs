@@ -3,6 +3,7 @@
 mod errors;
 use libc::c_void;
 use std::ffi::{CStr, CString};
+use std::collections::HashMap;
 mod hwt;
 
 pub use errors::InvalidTraceError;
@@ -48,14 +49,15 @@ impl IRBlock {
 /// An LLVM IR trace.
 pub struct IRTrace {
     blocks: Vec<IRBlock>,
+    faddrs: HashMap<CString, u64>,
 }
 
 unsafe impl Send for IRTrace {}
 unsafe impl Sync for IRTrace {}
 
 impl IRTrace {
-    pub(crate) fn new(blocks: Vec<IRBlock>) -> Self {
-        Self { blocks }
+    pub(crate) fn new(input: (Vec<IRBlock>, HashMap<CString, u64>)) -> Self {
+        Self { blocks: input.0, faddrs: input.1 }
     }
 
     pub fn len(&self) -> usize {
@@ -75,7 +77,14 @@ impl IRTrace {
             bbs.push(blk.bb());
         }
 
-        unsafe { ykllvmwrap::__ykllvmwrap_irtrace_compile(func_names.as_ptr(), bbs.as_ptr(), len) }
+        let mut fnames = Vec::new();
+        let mut faddrs = Vec::new();
+        for k in self.faddrs.iter() {
+            fnames.push(k.0.as_ptr());
+            faddrs.push(*k.1);
+        }
+
+        unsafe { ykllvmwrap::__ykllvmwrap_irtrace_compile(func_names.as_ptr(), bbs.as_ptr(), len, fnames.as_ptr(), faddrs.as_ptr(), faddrs.len()) }
     }
 }
 

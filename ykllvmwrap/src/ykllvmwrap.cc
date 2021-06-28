@@ -16,6 +16,7 @@
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Transforms/Utils/ValueMapper.h>
+#include <llvm/Transforms/Utils/Cloning.h>
 
 #include <atomic>
 #include <dlfcn.h>
@@ -149,7 +150,7 @@ std::vector<Value *> get_trace_inputs(Function *F, uintptr_t BBIdx) {
 }
 
 // Compile a module in-memory and return a pointer to its function.
-extern "C" void *compile_module(string TraceName, Module *M) {
+extern "C" void *compile_module(string TraceName, Module *M, std::map<StringRef, uint64_t> GlobalMapping) {
   std::call_once(LLVMInitialised, initLLVM, nullptr);
 
   // FIXME Remember memman or allocated memory pointers so we can free the
@@ -165,6 +166,10 @@ extern "C" void *compile_module(string TraceName, Module *M) {
           .create();
   if (EE == nullptr)
     errx(EXIT_FAILURE, "Couldn't compile trace: %s", ErrStr.c_str());
+
+  for (auto GM : GlobalMapping) {
+    EE->addGlobalMapping(GM.first, GM.second);
+  }
 
   EE->finalizeObject();
   if (EE->hasError())
@@ -190,7 +195,7 @@ void dumpValueToString(Value *V, string &S) {
 // Print a trace's instructions "side-by-side" with the instructions from
 // which they were derived in the AOT module.
 void printSBS(Module *AOTMod, Module *JITMod, ValueToValueMapTy &RevVMap) {
-  assert(JITMod->size() == 1);
+  //assert(JITMod->size() == 1);
   Function *JITFunc = &*JITMod->begin();
 
   // Find the longest instruction from the JITMod so that we can align the
@@ -255,11 +260,14 @@ void printSBS(Module *AOTMod, Module *JITMod, ValueToValueMapTy &RevVMap) {
 //
 // Returns a pointer to the compiled function.
 extern "C" void *__ykllvmwrap_irtrace_compile(char *FuncNames[], size_t BBs[],
-                                              size_t Len) {
+                                              size_t Len,
+                                              char *FNames[], size_t FAddrs[],
+                                              size_t FLen) {
   ThreadSafeModule *ThreadAOTMod = getThreadAOTMod();
   // Getting the module without acquiring the context lock is safe in this
   // instance since ThreadAOTMod is not shared between threads.
   Module *AOTMod = ThreadAOTMod->getModuleUnlocked();
+  AOTMod->dump();
   LLVMContext &JITContext = AOTMod->getContext();
   auto JITMod = new Module("", JITContext);
   uint64_t TraceIdx = NextTraceIdx.fetch_add(1);
@@ -310,6 +318,8 @@ extern "C" void *__ykllvmwrap_irtrace_compile(char *FuncNames[], size_t BBs[],
   std::vector<CallInst *> inlined_calls;
   CallInst *last_call = nullptr;
   std::vector<GlobalVariable *> cloned_globals;
+  std::map<StringRef, uint64_t> globalmappings;
+  size_t inline_stack_count = 0;
 
   // Iterate over the PT trace and stitch together all traced blocks.
   for (size_t Idx = 0; Idx < Len; Idx++) {
@@ -328,11 +338,6 @@ extern "C" void *__ykllvmwrap_irtrace_compile(char *FuncNames[], size_t BBs[],
     // Iterate over all instructions within this block and copy them over
     // to our new module.
     for (auto I = BB->begin(); I != BB->end(); I++) {
-      // Skip calls to debug intrinsics (e.g. @llvm.dbg.value). We don't
-      // currently handle debug info and these "pseudo-calls" cause our blocks
-      // to be prematurely terminated.
-      if (isa<DbgInfoIntrinsic>(I))
-        continue;
 
       // If we've returned from a call skip ahead to the instruction where we
       // left off.
@@ -340,11 +345,47 @@ extern "C" void *__ykllvmwrap_irtrace_compile(char *FuncNames[], size_t BBs[],
         if (&*I == last_call) {
           last_call = nullptr;
         }
+        //errs() << "Skip until last call: ";
+        //I->dump();
         continue;
       }
+
+      if (inline_stack_count > 0) {
+        if (isa<CallInst>(I)) {
+          CallInst *CI = cast<CallInst>(&*I);
+          Function *CF = CI->getCalledFunction();
+          Function *AOTF = AOTMod->getFunction(CF->getName());
+          if (AOTF != nullptr && AOTF->getLinkage() != GlobalValue::ExternalLinkage) {
+            inlined_calls.push_back(CI);
+            inline_stack_count += 1;
+            I->dump();
+            errs() << "ISC: " << inline_stack_count << "\n";
+          }
+        }
+
+        if (isa<ReturnInst>(I)) {
+          inline_stack_count -= 1;
+          last_call = inlined_calls.back();
+          inlined_calls.pop_back();
+          I->dump();
+          errs() << "ISC: " << inline_stack_count << "\n";
+        }
+      }
+
+      if (inline_stack_count > 0) {
+        continue;
+      }
+
+      // Skip calls to debug intrinsics (e.g. @llvm.dbg.value). We don't
+      // currently handle debug info and these "pseudo-calls" cause our blocks
+      // to be prematurely terminated.
+      if (isa<DbgInfoIntrinsic>(I))
+        continue;
+
       if (isa<CallInst>(I)) {
         CallInst *CI = cast<CallInst>(&*I);
         Function *CF = CI->getCalledFunction();
+        StringRef CFName = CF->getName();
         if (CF == nullptr)
           continue;
 
@@ -353,12 +394,43 @@ extern "C" void *__ykllvmwrap_irtrace_compile(char *FuncNames[], size_t BBs[],
           continue;
         } else if (CF->getName() == YKTRACE_STOP) {
           break;
-        } else {
+        } else if (AOTMod->getFunction(CF->getName()) != nullptr) {
+          // We have IR for this function.
+          bool finline = true;
+          for (CallInst *cinst : inlined_calls) {
+            // Have we inlined this call already? Then this is recursion.
+            if (cinst->getCalledFunction() == CF) {
+              inlined_calls.push_back(CI);
+              inline_stack_count = 1;
+              errs() << "Don't inline: ";
+              I->dump();
+              // Don't inline this function again and leave the call intact.
+              // If we haven't already done so create an external definition
+              // for it, but only do so once.
+              if (globalmappings.count(CFName) == 0) {
+                  auto DeclFunc = llvm::Function::Create(CF->getFunctionType(),
+                          GlobalValue::ExternalLinkage, CF->getName(), JITMod);
+                  VMap[CF] = DeclFunc;
+                  for (size_t i = 0; i < FLen; i++) {
+                      char *mapname = FNames[i];
+                      uint64_t mapaddr = FAddrs[i];
+                      if (strcmp(mapname, CFName.data()) == 0) {
+                        globalmappings.insert(std::pair<StringRef, uint64_t>(CFName, mapaddr));
+                        break;
+                      }
+                  }
+              }
+              finline = false;
+              break;
+            }
+          }
           // Skip remainder of this block and remember where we stopped so we
-          // can continue tracing from this position after returning frome the
+          // can continue tracing from this position after returning from the
           // inlined call.
           // FIXME Deal with calls we cannot or don't want to inline.
-          if (StartTracingInstr != nullptr) {
+          if (StartTracingInstr != nullptr && finline) {
+            errs() << "Rewrite args:";
+            I->dump();
             inlined_calls.push_back(CI);
             // During inlining, remap function arguments to the variables
             // passed in by the caller.
@@ -373,6 +445,8 @@ extern "C" void *__ykllvmwrap_irtrace_compile(char *FuncNames[], size_t BBs[],
             }
             break;
           }
+        } else {
+          // We don't have IR for this function.
         }
       }
 
@@ -387,21 +461,32 @@ extern "C" void *__ykllvmwrap_irtrace_compile(char *FuncNames[], size_t BBs[],
       }
 
       if (isa<ReturnInst>(I)) {
+        errs() << "Remap return";
+        I->dump();
         last_call = inlined_calls.back();
         inlined_calls.pop_back();
+        last_call->dump();
         // Replace the return variable of the call with its return value.
         // Since the return value will have already been copied over to the
         // JITModule, make sure we look up the copy.
         auto OldRetVal = ((ReturnInst *)&*I)->getReturnValue();
         if (isa<Constant>(OldRetVal)) {
+          errs() << "Constant";
           VMap[last_call] = OldRetVal;
         } else {
+          OldRetVal->dump();
           auto NewRetVal = VMap[OldRetVal];
+          errs() << "bla";
+          NewRetVal->dump();
+          errs() << "bla";
+          last_call->dump();
           VMap[last_call] = NewRetVal;
         }
         break;
       }
 
+      errs() << "Add: ";
+      I->dump();
       // If execution reaches here, then the instruction I is to be copied into
       // JITMod. Before we can do this, we have to scan the instruction's
       // operands checking that each is defined in JITMod.
@@ -523,5 +608,5 @@ extern "C" void *__ykllvmwrap_irtrace_compile(char *FuncNames[], size_t BBs[],
   }
 
   // Compile IR trace and return a pointer to its function.
-  return compile_module(TraceName, JITMod);
+  return compile_module(TraceName, JITMod, globalmappings);
 }
