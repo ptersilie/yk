@@ -7,7 +7,7 @@ use std::ffi::CStr;
 use std::mem::MaybeUninit;
 
 mod llvmbridge;
-use llvmbridge::{LLVMInstruction};
+use llvmbridge::{LLVMModule, LLVMInstruction, LLVMBranchInst};
 
 /// Stopgap interpreter values.
 #[derive(Debug)]
@@ -43,11 +43,11 @@ impl Frame {
 /// interpreting LLVM IR.
 pub struct SGInterp {
     /// LLVM IR module we are interpreting.
-    module: LLVMModuleRef,
+    module: LLVMModule,
     /// Current frames.
     frames: Vec<Frame>,
     /// Current instruction being interpreted.
-    pc: LLVMValueRef,
+    pc: LLVMInstruction,
 }
 
 impl SGInterp {
@@ -56,21 +56,9 @@ impl SGInterp {
     /// FIXME: Support initalisation of multiple frames.
     pub unsafe fn new(bbidx: u32, instridx: u32, fname: &CStr) -> SGInterp {
         // Get AOT module IR and parse it.
-        let (addr, size) = ykutil::obj::llvmbc_section();
-        let membuf = LLVMCreateMemoryBufferWithMemoryRange(
-            addr as *const i8,
-            size,
-            "".as_ptr() as *const i8,
-            0,
-        );
-        let context = LLVMContextCreate();
-        let mut module: MaybeUninit<LLVMModuleRef> = MaybeUninit::uninit();
-        let module = {
-            LLVMParseBitcodeInContext2(context, membuf, module.as_mut_ptr());
-            module.assume_init()
-        };
+        let module = LLVMModule::from_bc();
         // Create and initialise stop gap interpreter.
-        let func = llvmbridge::LLVMFunction::new(LLVMGetNamedFunction(module, fname.as_ptr()));
+        let func = module.function(fname.as_ptr());
         let bb = func.bb(bbidx);
         let instr = bb.instruction(instridx);
         SGInterp {
@@ -82,10 +70,10 @@ impl SGInterp {
 
     /// Add a live variable and its value to the current frame.
     pub unsafe fn init_live(&mut self, bbidx: u32, instridx: u32, fname: &CStr, value: SGValue) {
-        let func = llvmbridge::LLVMFunction::new(LLVMGetNamedFunction(self.module, fname.as_ptr()));
+        let func = self.module.function(fname.as_ptr());
         let bb = func.bb(bbidx);
         let instr = bb.instruction(instridx);
-        self.frames.last_mut().unwrap().add(LLVMInstruction::new(instr), value);
+        self.frames.last_mut().unwrap().add(instr, value);
     }
 
     /// Lookup the value of variable `var` in the current frame.
@@ -98,28 +86,29 @@ impl SGInterp {
         // We start interpretation at the branch instruction that was turned into a guard. We need
         // to re-interpret this instruction in order to find out which branch we need to follow.
         loop {
-            match LLVMGetInstructionOpcode(self.pc) {
-                LLVMOpcode::LLVMBr => self.branch(self.pc),
-                LLVMOpcode::LLVMRet => self.ret(self.pc),
-                _ => todo!("{:?}", CStr::from_ptr(LLVMPrintValueToString(self.pc))),
+            match self.pc.opcode() {
+                LLVMOpcode::LLVMBr => self.branch(),
+                //LLVMOpcode::LLVMRet => self.ret(self.pc),
+                _ => todo!("{:?}", self.pc.as_str()),
             }
         }
     }
 
     /// Interpret branch instruction `instr`.
-    pub unsafe fn branch(&mut self, instr: LLVMValueRef) {
-        let cond = LLVMInstruction::new(LLVMGetCondition(instr));
+    pub unsafe fn branch(&mut self) {
+        let br = LLVMBranchInst::new(self.pc.valueref());
+        let cond = br.condition();
         let val = self.lookup(&cond);
         let res = match val.unwrap() {
             SGValue::U32(v) => *v == 1,
             SGValue::U64(v) => *v == 1,
         };
         let succ = if res {
-            LLVMGetSuccessor(instr, 0)
+            br.successor(0)
         } else {
-            LLVMGetSuccessor(instr, 1)
+            br.successor(1)
         };
-        self.pc = LLVMGetFirstInstruction(succ);
+        self.pc = succ.first();
     }
 
     /// Interpret return instruction `instr`.
