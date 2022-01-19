@@ -17,15 +17,11 @@ use std::{ptr, slice};
 use ykrt::{HotThreshold, Location, MT};
 use yksmp::{Location as SMLocation, StackMapParser};
 
-mod sginterp;
-use sginterp::{SGInterp, SGValue};
+use yksgi::{SGInterp, SGValue};
 
 /// The first three locations of an LLVM stackmap record, according to the source, are CC, Flags,
 /// Num Deopts, which need to be skipped when mapping the stackmap values back to AOT variables.
 const SM_REC_HEADER: usize = 3;
-
-mod llvmapihelper;
-mod llvmwrap;
 
 // The "dummy control point" that is replaced in an LLVM pass.
 #[no_mangle]
