@@ -56,23 +56,44 @@ impl LLVMBasicBlock {
         Self(bb)
     }
 
-    pub unsafe fn first(&self) -> LLVMInstruction {
+    pub unsafe fn first(&self) -> LLVMInst {
         self.instruction(0)
     }
 
-    pub unsafe fn instruction(&self, instridx: u32) -> LLVMInstruction {
+    pub unsafe fn instruction(&self, instridx: u32) -> LLVMInst {
         let mut instr = LLVMGetFirstInstruction(self.0);
         for _ in 0..instridx {
             instr = LLVMGetNextInstruction(instr);
         }
-        LLVMInstruction::new(instr)
+        LLVMInst::new(instr)
+    }
+}
+
+pub trait LLVMUser {
+    unsafe fn get_operand(&self, idx: usize) -> LLVMValue {
+        let op = LLVMGetOperand(self.valueref(), 0);
+        LLVMValue(op)
+    }
+
+    unsafe fn is_constant(&self) -> bool {
+        !LLVMIsAConstant(self.valueref()).is_null()
+    }
+
+    fn valueref(&self) -> LLVMValueRef;
+}
+
+#[derive(PartialEq, Eq, Hash)]
+pub struct LLVMValue(LLVMValueRef);
+impl LLVMUser for LLVMValue {
+    fn valueref(&self) -> LLVMValueRef {
+        self.0
     }
 }
 
 #[derive(PartialEq, Eq, Hash)]
-pub struct LLVMInstruction(LLVMValueRef);
+pub struct LLVMInst(LLVMValueRef);
 
-impl LLVMInstruction {
+impl LLVMInst {
     pub unsafe fn new(instr: LLVMValueRef) -> Self {
         debug_assert!(!LLVMIsAInstruction(instr).is_null());
         Self(instr)
@@ -99,13 +120,27 @@ impl LLVMBranchInst {
         Self(instr)
     }
 
-    pub unsafe fn condition(&self) -> LLVMInstruction {
+    pub unsafe fn condition(&self) -> LLVMValue {
         let cond = LLVMGetCondition(self.0);
-        LLVMInstruction::new(cond)
+        LLVMValue(cond)
     }
 
     pub unsafe fn successor(&self, idx: u32) -> LLVMBasicBlock {
         LLVMBasicBlock::new(LLVMGetSuccessor(self.0, idx))
+    }
+}
+
+
+#[derive(PartialEq, Eq, Hash)]
+pub struct LLVMRetInst(LLVMValueRef);
+impl LLVMRetInst {
+    pub unsafe fn new(instr: LLVMValueRef) -> Self {
+        Self(instr)
+    }
+}
+impl LLVMUser for LLVMRetInst {
+    fn valueref(&self) -> LLVMValueRef {
+        self.0
     }
 }
 
