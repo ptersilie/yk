@@ -7,7 +7,7 @@ use std::ffi::CStr;
 use std::mem::MaybeUninit;
 
 mod llvmbridge;
-use llvmbridge::{LLVMModule, LLVMInst, LLVMBranchInst, LLVMRetInst, LLVMUser, LLVMValue};
+use llvmbridge::{LLVMModule, LLVMInst, LLVMBranchInst, LLVMRetInst, LLVMUser, LLVMValue, LLVMValueTrait};
 
 /// Stopgap interpreter values.
 #[derive(Debug)]

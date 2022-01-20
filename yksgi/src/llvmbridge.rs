@@ -69,26 +69,29 @@ impl LLVMBasicBlock {
     }
 }
 
-pub trait LLVMUser {
+pub trait LLVMValueTrait {
+    fn valueref(&self) -> LLVMValueRef;
+    unsafe fn is_constant(&self) -> bool {
+        !LLVMIsAConstant(self.valueref()).is_null()
+    }
+}
+
+pub trait LLVMUser: LLVMValueTrait {
     unsafe fn get_operand(&self, idx: usize) -> LLVMValue {
         let op = LLVMGetOperand(self.valueref(), 0);
         LLVMValue(op)
     }
 
-    unsafe fn is_constant(&self) -> bool {
-        !LLVMIsAConstant(self.valueref()).is_null()
-    }
-
-    fn valueref(&self) -> LLVMValueRef;
 }
 
 #[derive(PartialEq, Eq, Hash)]
 pub struct LLVMValue(LLVMValueRef);
-impl LLVMUser for LLVMValue {
+impl LLVMValueTrait for LLVMValue {
     fn valueref(&self) -> LLVMValueRef {
         self.0
     }
 }
+impl LLVMUser for LLVMValue {}
 
 #[derive(PartialEq, Eq, Hash)]
 pub struct LLVMInst(LLVMValueRef);
@@ -138,11 +141,12 @@ impl LLVMRetInst {
         Self(instr)
     }
 }
-impl LLVMUser for LLVMRetInst {
+impl LLVMValueTrait for LLVMRetInst {
     fn valueref(&self) -> LLVMValueRef {
         self.0
     }
 }
+impl LLVMUser for LLVMRetInst {}
 
 pub unsafe fn llvm_const_to_sgvalue(c: LLVMValueRef) -> SGValue {
     let ty = LLVMTypeOf(c);
