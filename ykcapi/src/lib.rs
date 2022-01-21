@@ -101,6 +101,8 @@ impl Registers {
     }
 }
 
+/// Location in terms of basic block index, instruction index, and function name, of a
+/// variable in the AOT module. Mirrors the LLVM struct defined in ykllvmwrap/jitmodbuilder.cc.
 #[derive(Debug)]
 #[repr(C)]
 struct AOTVar {
@@ -109,6 +111,8 @@ struct AOTVar {
     fname: *const i8,
 }
 
+/// Address and size of a vector containing AOTVars. Mirrors the struct defined in
+/// ykllvmwrap/jitmodbuilder.cc.
 #[derive(Debug)]
 #[repr(C)]
 pub struct AOTMap {
@@ -116,6 +120,8 @@ pub struct AOTMap {
     size: usize,
 }
 
+/// Location (basic block index, instruction index, function name) in the AOTModule where the guard
+/// failure occured. Mirrors the struct defined in ykllvmwrap/jitmodbuilder.cc.
 #[derive(Debug)]
 #[repr(C)]
 pub struct CurPos {
@@ -124,7 +130,7 @@ pub struct CurPos {
     fname: *const i8,
 }
 
-/// Parses the stackmap and saved registers from the given address (i.e. the return address of the
+/// Reads the stackmap and saved registers from the given address (i.e. the return address of the
 /// deoptimisation call).
 #[cfg(target_arch = "x86_64")]
 #[no_mangle]

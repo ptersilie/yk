@@ -53,7 +53,7 @@ pub struct SGInterp {
 impl SGInterp {
     /// Create a new stopgap interpreter and initialise it to start interpretation at the location
     /// given by a basic block index, instruction index, and function name.
-    /// FIXME: Support initalisation of multiple frames.
+    /// FIXME: Support initialisation of multiple frames.
     pub unsafe fn new(bbidx: usize, instridx: usize, fname: &CStr) -> SGInterp {
         // Get AOT module IR and parse it.
         let module = LLVMModule::from_bc();
@@ -86,7 +86,7 @@ impl SGInterp {
         }
     }
 
-    /// Start interpretation of the initialised interpreter.
+    /// Interpret LLVM IR from the interpreters initialised position.
     pub unsafe fn interpret(&mut self) {
         // We start interpretation at the branch instruction that was turned into a guard. We need
         // to re-interpret this instruction in order to find out which branch we need to follow.
@@ -132,6 +132,8 @@ impl SGInterp {
                 SGValue::U64(v) => v as i32,
             };
             std::process::exit(ret);
+        } else {
+            todo!()
         }
     }
 }
