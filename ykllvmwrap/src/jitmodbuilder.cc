@@ -499,11 +499,9 @@ class JITModBuilder {
           StructType::get(Context, {SizeTTy, SizeTTy, Int8PtrTy});
       AllocaInst *CurPos =
           Builder.CreateAlloca(CurPosSTy, ConstantInt::get(SizeTTy, 1));
-      errs() << "here\n";
       auto GEP = Builder.CreateGEP(
           CurPosSTy, CurPos,
           {ConstantInt::get(SizeTTy, 0), ConstantInt::get(Int32Ty, 0)});
-      errs() << "here\n";
       Builder.CreateStore(ConstantInt::get(SizeTTy, CurBBIdx), GEP);
       GEP = Builder.CreateGEP(
           CurPosSTy, CurPos,
