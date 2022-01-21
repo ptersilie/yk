@@ -10,7 +10,7 @@
 #![feature(c_variadic)]
 #![feature(once_cell)]
 
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 use std::ffi::c_void;
 use std::process;
 use std::{ptr, slice};
@@ -82,9 +82,6 @@ impl Registers {
     /// register's value.
     #[cfg(target_arch = "x86_64")]
     unsafe fn get(&self, id: u16) -> usize {
-        if id == 6 {
-            unreachable!("We currently have no way to access RBP of the previous stackframe.")
-        }
         if id > 7 {
             unreachable!(
                 "Register #{} currently not saved during deoptimisation.",
@@ -144,6 +141,7 @@ pub extern "C" fn yk_stopgap(
 ) {
     // FIXME: remove once we have a stopgap interpreter.
     eprintln!("jit-state: stopgap");
+    eprintln!("{:?} {} {} {:?}", sm_addr, sm_size, retaddr, rsp);
 
     // Parse AOTMap.
     let aotmap = unsafe { slice::from_raw_parts(aotmap.addr as *const AOTVar, aotmap.size) };
@@ -189,7 +187,8 @@ pub extern "C" fn yk_stopgap(
                 eprintln!("Direct: {} ({} {})", v, reg, off);
             }
             SMLocation::Indirect(reg, off, size) => {
-                let addr = unsafe { registers.get(*reg) + (*off as usize) };
+                let addr = unsafe { registers.get(*reg) as *mut u8 };
+                let addr = unsafe { addr.offset(isize::try_from(*off).unwrap()) };
                 let v = match *size {
                     1 => unsafe { ptr::read::<u8>(addr as *mut u8) as u64 },
                     2 => unsafe { ptr::read::<u16>(addr as *mut u16) as u64 },
