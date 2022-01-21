@@ -54,7 +54,7 @@ impl SGInterp {
     /// Create a new stopgap interpreter and initialise it to start interpretation at the location
     /// given by a basic block index, instruction index, and function name.
     /// FIXME: Support initalisation of multiple frames.
-    pub unsafe fn new(bbidx: u32, instridx: u32, fname: &CStr) -> SGInterp {
+    pub unsafe fn new(bbidx: usize, instridx: usize, fname: &CStr) -> SGInterp {
         // Get AOT module IR and parse it.
         let module = LLVMModule::from_bc();
         // Create and initialise stop gap interpreter.
@@ -69,7 +69,7 @@ impl SGInterp {
     }
 
     /// Add a live variable and its value to the current frame.
-    pub unsafe fn init_live(&mut self, bbidx: u32, instridx: u32, fname: &CStr, value: SGValue) {
+    pub unsafe fn init_live(&mut self, bbidx: usize, instridx: usize, fname: &CStr, value: SGValue) {
         let func = self.module.function(fname.as_ptr());
         let bb = func.bb(bbidx);
         let instr = bb.instruction(instridx);

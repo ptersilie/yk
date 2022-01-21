@@ -104,8 +104,8 @@ impl Registers {
 #[derive(Debug)]
 #[repr(C)]
 struct AOTVar {
-    bbidx: u32,
-    instridx: u32,
+    bbidx: usize,
+    instridx: usize,
     fname: *const i8,
 }
 
@@ -119,8 +119,8 @@ pub struct AOTMap {
 #[derive(Debug)]
 #[repr(C)]
 pub struct CurPos {
-    bbidx: u32,
-    instridx: u32,
+    bbidx: usize,
+    instridx: usize,
     fname: *const i8,
 }
 

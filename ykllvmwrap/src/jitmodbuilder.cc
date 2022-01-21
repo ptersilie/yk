@@ -481,6 +481,13 @@ class JITModBuilder {
       LiveVals.push_back(CurrentInst);
 
       // FIXME use more flexible type than int32
+
+// Add arguments for stackmap pointer and size.
+#if defined(__x86_64)
+      IntegerType *SizeTTy = Type::getInt64Ty(Context);
+#else
+#error Not implemented!
+#endif
       IntegerType *Int32Ty = Type::getInt32Ty(Context);
       PointerType *Int8PtrTy = Type::getInt8PtrTy(Context);
 
@@ -489,29 +496,31 @@ class JITModBuilder {
       // correct location from where to start interpretation.
       // FIXME: Use function index instead of string name.
       StructType *CurPosSTy =
-          StructType::get(Context, {Int32Ty, Int32Ty, Int8PtrTy});
+          StructType::get(Context, {SizeTTy, SizeTTy, Int8PtrTy});
       AllocaInst *CurPos =
-          Builder.CreateAlloca(CurPosSTy, ConstantInt::get(Int32Ty, 1));
+          Builder.CreateAlloca(CurPosSTy, ConstantInt::get(SizeTTy, 1));
+      errs() << "here\n";
       auto GEP = Builder.CreateGEP(
           CurPosSTy, CurPos,
-          {ConstantInt::get(Int32Ty, 0), ConstantInt::get(Int32Ty, 0)});
-      Builder.CreateStore(ConstantInt::get(Int32Ty, CurBBIdx), GEP);
+          {ConstantInt::get(SizeTTy, 0), ConstantInt::get(Int32Ty, 0)});
+      errs() << "here\n";
+      Builder.CreateStore(ConstantInt::get(SizeTTy, CurBBIdx), GEP);
       GEP = Builder.CreateGEP(
           CurPosSTy, CurPos,
-          {ConstantInt::get(Int32Ty, 0), ConstantInt::get(Int32Ty, 1)});
-      Builder.CreateStore(ConstantInt::get(Int32Ty, CurInstrIdx), GEP);
+          {ConstantInt::get(SizeTTy, 0), ConstantInt::get(Int32Ty, 1)});
+      Builder.CreateStore(ConstantInt::get(SizeTTy, CurInstrIdx), GEP);
       Value *CurFunc = Builder.CreateGlobalStringPtr(FuncName);
       GEP = Builder.CreateGEP(
           CurPosSTy, CurPos,
-          {ConstantInt::get(Int32Ty, 0), ConstantInt::get(Int32Ty, 2)});
+          {ConstantInt::get(SizeTTy, 0), ConstantInt::get(Int32Ty, 2)});
       Builder.CreateStore(CurFunc, GEP);
 
       // Create a vector in which to store the locations of the corresponding
       // AOT variables.
       StructType *AOTLocTy =
-          StructType::get(Context, {Int32Ty, Int32Ty, Int8PtrTy});
+          StructType::get(Context, {SizeTTy, SizeTTy, Int8PtrTy});
       AllocaInst *AOTLocVec = Builder.CreateAlloca(
-          AOTLocTy, ConstantInt::get(Int32Ty, LiveVals.size()));
+          AOTLocTy, ConstantInt::get(SizeTTy, LiveVals.size()));
       std::map<std::string, Value *> FuncPtrMap;
       for (size_t I = 0; I < LiveVals.size(); I++) {
         Value *Live = LiveVals[I];
@@ -531,15 +540,15 @@ class JITModBuilder {
         }
         auto GEP = Builder.CreateGEP(
             AOTLocTy, AOTLocVec,
-            {ConstantInt::get(Int32Ty, I), ConstantInt::get(Int32Ty, 0)});
-        Builder.CreateStore(ConstantInt::get(Int32Ty, BBIdx), GEP);
+            {ConstantInt::get(SizeTTy, I), ConstantInt::get(Int32Ty, 0)});
+        Builder.CreateStore(ConstantInt::get(SizeTTy, BBIdx), GEP);
         GEP = Builder.CreateGEP(
             AOTLocTy, AOTLocVec,
-            {ConstantInt::get(Int32Ty, I), ConstantInt::get(Int32Ty, 1)});
-        Builder.CreateStore(ConstantInt::get(Int32Ty, InstrIdx), GEP);
+            {ConstantInt::get(SizeTTy, I), ConstantInt::get(Int32Ty, 1)});
+        Builder.CreateStore(ConstantInt::get(SizeTTy, InstrIdx), GEP);
         GEP = Builder.CreateGEP(
             AOTLocTy, AOTLocVec,
-            {ConstantInt::get(Int32Ty, I), ConstantInt::get(Int32Ty, 2)});
+            {ConstantInt::get(SizeTTy, I), ConstantInt::get(Int32Ty, 2)});
         Builder.CreateStore(FPtr, GEP);
       }
 
@@ -547,17 +556,17 @@ class JITModBuilder {
       // save arguments.
       PointerType *AOTLocVecPtrTy = PointerType::get(AOTLocTy, 0);
       StructType *AOTMapSTy =
-          StructType::get(Context, {AOTLocVecPtrTy, Int32Ty});
+          StructType::get(Context, {AOTLocVecPtrTy, SizeTTy});
       AllocaInst *AOTMap =
-          Builder.CreateAlloca(AOTMapSTy, ConstantInt::get(Int32Ty, 1));
+          Builder.CreateAlloca(AOTMapSTy, ConstantInt::get(SizeTTy, 1));
       GEP = Builder.CreateGEP(
           AOTMapSTy, AOTMap,
-          {ConstantInt::get(Int32Ty, 0), ConstantInt::get(Int32Ty, 0)});
+          {ConstantInt::get(SizeTTy, 0), ConstantInt::get(Int32Ty, 0)});
       Builder.CreateStore(AOTLocVec, GEP);
       GEP = Builder.CreateGEP(
           AOTMapSTy, AOTMap,
-          {ConstantInt::get(Int32Ty, 0), ConstantInt::get(Int32Ty, 1)});
-      Builder.CreateStore(ConstantInt::get(Int32Ty, LiveVals.size()), GEP);
+          {ConstantInt::get(SizeTTy, 0), ConstantInt::get(Int32Ty, 1)});
+      Builder.CreateStore(ConstantInt::get(SizeTTy, LiveVals.size()), GEP);
 
       // Create the deoptimization call.
       Type *voidty = Type::getVoidTy(Context);

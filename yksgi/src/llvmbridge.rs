@@ -40,7 +40,7 @@ impl LLVMFunction {
         Self(func)
     }
 
-    pub unsafe fn bb(&self, bbidx: u32) -> LLVMBasicBlock {
+    pub unsafe fn bb(&self, bbidx: usize) -> LLVMBasicBlock {
         let mut bb = LLVMGetFirstBasicBlock(self.0);
         for _ in 0..bbidx {
             bb = LLVMGetNextBasicBlock(bb);
@@ -60,7 +60,7 @@ impl LLVMBasicBlock {
         self.instruction(0)
     }
 
-    pub unsafe fn instruction(&self, instridx: u32) -> LLVMValue {
+    pub unsafe fn instruction(&self, instridx: usize) -> LLVMValue {
         let mut instr = LLVMGetFirstInstruction(self.0);
         for _ in 0..instridx {
             instr = LLVMGetNextInstruction(instr);
