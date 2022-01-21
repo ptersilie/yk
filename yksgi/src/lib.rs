@@ -7,7 +7,7 @@ use std::ffi::CStr;
 use std::mem::MaybeUninit;
 
 mod llvmbridge;
-use llvmbridge::{LLVMModule, LLVMInst, LLVMBranchInst, LLVMRetInst, LLVMUser, LLVMValue, LLVMValueTrait};
+use llvmbridge::{LLVMModule, LLVMBasicBlock, LLVMValue};
 
 /// Stopgap interpreter values.
 #[derive(Debug)]
@@ -18,7 +18,7 @@ pub enum SGValue {
 
 /// A frame holding live variables.
 struct Frame {
-    vars: HashMap<LLVMInst, SGValue>,
+    vars: HashMap<LLVMValue, SGValue>,
 }
 
 impl Frame {
@@ -29,12 +29,12 @@ impl Frame {
     }
 
     /// Get the value of the variable `key` in this frame.
-    fn get(&self, key: &LLVMInst) -> Option<&SGValue> {
+    fn get(&self, key: &LLVMValue) -> Option<&SGValue> {
         self.vars.get(key)
     }
 
     /// Insert new variable into this frame.
-    fn add(&mut self, key: LLVMInst, val: SGValue) {
+    fn add(&mut self, key: LLVMValue, val: SGValue) {
         self.vars.insert(key, val);
     }
 }
@@ -47,7 +47,7 @@ pub struct SGInterp {
     /// Current frames.
     frames: Vec<Frame>,
     /// Current instruction being interpreted.
-    pc: LLVMInst,
+    pc: LLVMValue,
 }
 
 impl SGInterp {
@@ -77,8 +77,13 @@ impl SGInterp {
     }
 
     /// Lookup the value of variable `var` in the current frame.
-    fn lookup(&self, var: &LLVMInst) -> Option<&SGValue> {
-        self.frames.last().unwrap().get(var)
+    unsafe fn lookup(&self, var: &LLVMValue) -> Option<&SGValue> {
+        if var.is_instruction() {
+            self.frames.last().unwrap().get(var)
+        } else {
+            // GlobalVariable, Function, etc.
+            todo!()
+        }
     }
 
     /// Start interpretation of the initialised interpreter.
@@ -96,31 +101,29 @@ impl SGInterp {
 
     /// Interpret branch instruction `instr`.
     pub unsafe fn branch(&mut self) {
-        let br = LLVMBranchInst::new(self.pc.valueref());
-        let cond = br.condition();
-        let cinst = LLVMInst::new(cond.valueref());
-        let val = self.lookup(&cinst);
+        debug_assert!(self.pc.is_br());
+        let cond = LLVMValue::new(LLVMGetCondition(self.pc.0));
+        let val = self.lookup(&cond);
         let res = match val.unwrap() {
             SGValue::U32(v) => *v == 1,
             SGValue::U64(v) => *v == 1,
         };
         let succ = if res {
-            br.successor(0)
+            LLVMBasicBlock::new(LLVMGetSuccessor(self.pc.0, 0))
         } else {
-            br.successor(1)
+            LLVMBasicBlock::new(LLVMGetSuccessor(self.pc.0, 1))
         };
         self.pc = succ.first();
     }
 
     /// Interpret return instruction `instr`.
     unsafe fn ret(&mut self) {
-        let ret = LLVMRetInst::new(self.pc.valueref());
         if self.frames.len() == 1 {
             // We've reached the end of the interpreters main, so just get the return value and
             // exit. This is possibly a hack, though I'm not sure what the correct behaviour is.
-            let op = ret.get_operand(0);
+            let op = LLVMValue::new(LLVMGetOperand(self.pc.0, 0));
             let val = if op.is_constant() {
-                llvmbridge::llvm_const_to_sgvalue(op.valueref())
+                llvmbridge::llvm_const_to_sgvalue(op.0)
             } else {
                 todo!()
             };

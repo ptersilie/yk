@@ -56,97 +56,52 @@ impl LLVMBasicBlock {
         Self(bb)
     }
 
-    pub unsafe fn first(&self) -> LLVMInst {
+    pub unsafe fn first(&self) -> LLVMValue {
         self.instruction(0)
     }
 
-    pub unsafe fn instruction(&self, instridx: u32) -> LLVMInst {
+    pub unsafe fn instruction(&self, instridx: u32) -> LLVMValue {
         let mut instr = LLVMGetFirstInstruction(self.0);
         for _ in 0..instridx {
             instr = LLVMGetNextInstruction(instr);
         }
-        LLVMInst::new(instr)
+        LLVMValue::new(instr)
     }
-}
-
-pub trait LLVMValueTrait {
-    fn valueref(&self) -> LLVMValueRef;
-    unsafe fn is_constant(&self) -> bool {
-        !LLVMIsAConstant(self.valueref()).is_null()
-    }
-}
-
-pub trait LLVMUser: LLVMValueTrait {
-    unsafe fn get_operand(&self, idx: usize) -> LLVMValue {
-        let op = LLVMGetOperand(self.valueref(), 0);
-        LLVMValue(op)
-    }
-
 }
 
 #[derive(PartialEq, Eq, Hash)]
-pub struct LLVMValue(LLVMValueRef);
-impl LLVMValueTrait for LLVMValue {
-    fn valueref(&self) -> LLVMValueRef {
-        self.0
+pub struct LLVMValue(pub LLVMValueRef);
+impl LLVMValue {
+
+    pub unsafe fn new(vref: LLVMValueRef) -> Self {
+        LLVMValue(vref)
     }
-}
-impl LLVMUser for LLVMValue {}
+    
+    pub unsafe fn is_constant(&self) -> bool {
+        !LLVMIsAConstant(self.0).is_null()
+    }
 
-#[derive(PartialEq, Eq, Hash)]
-pub struct LLVMInst(LLVMValueRef);
+    pub unsafe fn is_br(&self) -> bool {
+        !LLVMIsABranchInst(self.0).is_null()
+    }
 
-impl LLVMInst {
-    pub unsafe fn new(instr: LLVMValueRef) -> Self {
-        debug_assert!(!LLVMIsAInstruction(instr).is_null());
-        Self(instr)
+    pub unsafe fn is_instruction(&self) -> bool {
+        !LLVMIsAInstruction(self.0).is_null()
+    }
+
+    pub unsafe fn opcode(&self) -> LLVMOpcode {
+        debug_assert!(!LLVMIsAInstruction(self.0).is_null());
+        LLVMGetInstructionOpcode(self.0)
     }
 
     pub unsafe fn as_str(&self) -> &CStr {
         CStr::from_ptr(LLVMPrintValueToString(self.0))
     }
 
-    pub unsafe fn opcode(&self) -> LLVMOpcode {
-        LLVMGetInstructionOpcode(self.0)
-    }
-
-    pub unsafe fn valueref(&self) -> LLVMValueRef {
-        self.0
-    }
-}
-
-#[derive(PartialEq, Eq, Hash)]
-pub struct LLVMBranchInst(LLVMValueRef);
-
-impl LLVMBranchInst {
-    pub unsafe fn new(instr: LLVMValueRef) -> Self {
-        Self(instr)
-    }
-
-    pub unsafe fn condition(&self) -> LLVMValue {
-        let cond = LLVMGetCondition(self.0);
-        LLVMValue(cond)
-    }
-
-    pub unsafe fn successor(&self, idx: u32) -> LLVMBasicBlock {
-        LLVMBasicBlock::new(LLVMGetSuccessor(self.0, idx))
-    }
-}
-
-
-#[derive(PartialEq, Eq, Hash)]
-pub struct LLVMRetInst(LLVMValueRef);
-impl LLVMRetInst {
-    pub unsafe fn new(instr: LLVMValueRef) -> Self {
-        Self(instr)
-    }
-}
-impl LLVMValueTrait for LLVMRetInst {
     fn valueref(&self) -> LLVMValueRef {
         self.0
     }
 }
-impl LLVMUser for LLVMRetInst {}
 
 pub unsafe fn llvm_const_to_sgvalue(c: LLVMValueRef) -> SGValue {
     let ty = LLVMTypeOf(c);
