@@ -52,14 +52,14 @@ pub extern "C" fn __ykrt_control_point(
     // Opaque pointer in which to store the result of the control point's caller's return value as
     // interpreted by the stopgap interpreter.
     returnval: *mut c_void,
-) -> bool {
+) -> u64 {
     debug_assert!(!ctrlp_vars.is_null());
     if !loc.is_null() {
         let mt = unsafe { &*mt };
         let loc = unsafe { &*loc };
         return mt.control_point(loc, ctrlp_vars, returnval);
     }
-    false
+    0
 }
 
 #[no_mangle]
@@ -140,6 +140,34 @@ pub struct CVec {
     length: usize,
 }
 
+/// Reconstructs the stackframes and jumps back to AOT code from where to continue after a guard
+/// failure.
+#[cfg(target_arch = "x86_64")]
+#[naked]
+#[no_mangle]
+pub extern "C" fn __ykrt_reconstruct_frames(
+    newframesptr: *const c_void,
+) {
+    unsafe {
+        asm!(
+            // Copy over the new frames.
+            "sub rsp, 48",
+            "mov rsi, rdi",
+            "mov rdi, rsp",
+            "mov rdx, 48",
+            "call memcpy",
+            // Restore callee saved registers.
+            "pop rbx",
+            "pop r12",
+            "pop r13",
+            "pop r14",
+            "pop r15",
+            "ret",
+            options(noreturn)
+        )
+    }
+}
+
 /// Reads the stackmap and saved registers from the given address (i.e. the return address of the
 /// deoptimisation call).
 #[cfg(target_arch = "x86_64")]
@@ -148,10 +176,10 @@ pub extern "C" fn yk_stopgap(
     stackmap: &CVec,
     aotmap: &CVec,
     actframes: &CVec,
-    retvalptr: *mut c_void,
+    retvalptr: *mut c_void, // this is the bottom frame address now
     retaddr: usize,
     rsp: *const c_void,
-) -> u8 {
+) -> u64 {
     // FIXME: remove once we have a stopgap interpreter.
     #[cfg(feature = "yk_jitstate_debug")]
     print_jit_state("enter-stopgap");
@@ -167,9 +195,12 @@ pub extern "C" fn yk_stopgap(
     // Restore saved registers from the stack.
     let registers = Registers::from_ptr(rsp);
 
+    println!("frame address: {:?}", retvalptr);
+
     let mut sginterp = unsafe { SGInterp::new(activeframes, retvalptr) };
 
-    // Parse the stackmap.
+    // Parse the stackmap of the JIT module.
+    println!("stopgap: parse JIT stackmap");
     let slice = unsafe { slice::from_raw_parts(stackmap.addr as *mut u8, stackmap.length) };
     let map = StackMapParser::parse(slice).unwrap();
     let locs = map.get(&retaddr.try_into().unwrap()).unwrap();
@@ -237,7 +268,9 @@ pub extern "C" fn yk_stopgap(
             }
         }
     }
-    let ret = unsafe { sginterp.interpret() };
+    let ret = sginterp.reconstruct_stackmap(retvalptr);
+    println!("RET: {}", ret);
+    //let ret = unsafe { sginterp.interpret() };
     print_jit_state("exit-stopgap");
     ret
 }
@@ -252,7 +285,7 @@ pub extern "C" fn __llvm_deoptimize(
     aotmap: *const c_void,
     frames: *const c_void,
     retval: *mut c_void,
-) -> u8 {
+) -> u64 {
     // Push all registers to the stack before they can be clobbered, so that we can find their
     // values after parsing in the stackmap. The order in which we push the registers is equivalent
     // to the Sys-V x86_64 ABI, which the stackmap format uses as well. This function has the
@@ -282,6 +315,13 @@ pub extern "C" fn __llvm_deoptimize(
             "mov r9, rsp",
             "sub rsp, 8", // Alignment
             "call yk_stopgap",
+            // memcopy new stack over old stack
+            // copy correct vals into registers
+            //  idea: push register values onto new stack before its copied over
+            //  after copying over, delete mmap, then pop the registers
+            // jump
+            // instead of jump, push address to top of stack. then ret
+            //"jmp rbx",
             "add rsp, 72",
             // FIXME: Don't rely on RBP being pushed. Use frame size retrieved from
             // stackmap instead.

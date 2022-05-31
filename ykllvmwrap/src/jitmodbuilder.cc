@@ -38,7 +38,7 @@ uint64_t getNewTraceIdx() {
 
 // Return value telling the caller of the compiled trace that no guard failure
 // occurred and it's safe to continue running the fake trace stitching loop.
-#define TRACE_RETURN_SUCCESS 0
+#define TRACE_RETURN_SUCCESS 1
 
 // Dump an error message and an LLVM value to stderr and exit with failure.
 void dumpValueAndExit(const char *Msg, Value *V) {
@@ -478,7 +478,7 @@ class JITModBuilder {
     InputTypes.push_back(ReturnTy);
 
     llvm::FunctionType *FType = llvm::FunctionType::get(
-        Type::getInt8Ty(JITMod->getContext()), InputTypes, false);
+        Type::getInt64Ty(JITMod->getContext()), InputTypes, false);
     llvm::Function *JITFunc = llvm::Function::Create(
         FType, Function::ExternalLinkage, TraceName, JITMod);
     JITFunc->setCallingConv(CallingConv::C);
@@ -646,9 +646,12 @@ class JITModBuilder {
     for (size_t I = 0; I < LiveVals.size(); I++) {
       Value *Live = LiveVals[I];
       std::tuple<size_t, size_t, Instruction *, size_t> Entry = AOTMap[Live];
+      errs() << "AOT/LIVE MAPPING:";
+      Live->dump();
       size_t BBIdx = std::get<0>(Entry);
       size_t InstrIdx = std::get<1>(Entry);
       Instruction *AOTVar = std::get<2>(Entry);
+      AOTVar->dump();
       size_t StackFrameIdx = std::get<3>(Entry);
       auto iter = FuncPtrMap.find(AOTVar->getFunction()->getName().data());
       Value *FPtr;
@@ -709,7 +712,7 @@ class JITModBuilder {
     FailBuilder.CreateStore(JITFunc->getArg(JITFUNC_ARG_STACKMAP_LEN_IDX), GEP);
 
     // Create the deoptimization call.
-    Type *retty = Type::getInt8Ty(Context);
+    Type *retty = Type::getInt64Ty(Context);
     Function *DeoptInt = Intrinsic::getDeclaration(
         JITFunc->getParent(), Intrinsic::experimental_deoptimize, {retty});
     OperandBundleDef ob =
@@ -1109,10 +1112,11 @@ class JITModBuilder {
     if (CPCI->getNumArgOperands() != YK_CONTROL_POINT_NUM_ARGS) {
       // This means we are running the trace_compiler tests which only uses a
       // dummy control point so create a dummy return value too.
+      errs() << "JITFUNC RETURN TYPE I1\n";
       ReturnTy = Type::getInt1Ty(Context)->getPointerTo();
     } else {
-      ReturnTy =
-          CPCI->getArgOperand(YK_CONTROL_POINT_ARG_RETURNVAL_IDX)->getType();
+      errs() << "JITFUNC RETURN TYPE I64\n";
+      ReturnTy = Type::getInt64Ty(Context); // FIXME: Create PointerType
     }
     JITFunc = createJITFunc(TraceInputs, ReturnTy);
     auto DstBB = BasicBlock::Create(JITMod->getContext(), "", JITFunc);
@@ -1280,6 +1284,16 @@ public:
                 (IID == Intrinsic::lifetime_end))
               continue;
 
+            if (IID == Intrinsic::frameaddress)
+              continue;
+
+            if (IID == Intrinsic::experimental_stackmap) {
+              Value *SMID = (cast<CallBase>(I))->getArgOperand(0);
+              errs() << "FOUND STACKAMP";
+              SMID->dump();
+              continue;
+            }
+
             // Any intrinsic call which may generate machine code must have
             // metadata attached that specifies whether it has been inlined or
             // not.
@@ -1391,7 +1405,7 @@ public:
     // the trace.
     assert(OutlineCallDepth == 0);
 
-    Builder.CreateRet(ConstantInt::get(Type::getInt8Ty(JITMod->getContext()),
+    Builder.CreateRet(ConstantInt::get(Type::getInt64Ty(JITMod->getContext()),
                                        TRACE_RETURN_SUCCESS));
     finalise(AOTMod, &Builder);
     return JITMod;

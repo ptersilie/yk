@@ -8,20 +8,34 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::ffi::{c_void, CStr};
 use std::ptr;
+
 use std::slice;
+use std::{env, fs};
+use std::io::Write;
+use memmap2;
+use object::{Object, ObjectSection};
+use yksmp::{Location as SMLocation, StackMapParser};
 
 mod llvmbridge;
 use llvmbridge::{get_aot_original, BasicBlock, Module, Type, Value};
 
-static ALWAYS_SKIP_FUNCS: [&str; 5] = [
+static ALWAYS_SKIP_FUNCS: [&str; 6] = [
     "llvm.lifetime",
     "llvm.lifetime.end.p0i8",
     "llvm.dbg.value",
     "llvm.dbg.declare",
     "fprintf",
+    "llvm.experimental.stackmap",
 ];
 static SKIP_FOR_NOW_FUNCS: [&str; 2] = ["yk_location_drop", "yk_mt_drop"];
 static YK_CONTROL_POINT_FUNC: &str = "__ykrt_control_point";
+
+struct StackEntry {
+    reg: u16,
+    off: i32,
+    size: u16,
+    val: u64,
+}
 
 /// Active frames (basic block index, instruction index, function name) in the AOTModule where the
 /// guard failure occured. Mirrors the struct defined in ykllvmwrap/jitmodbuilder.cc.
@@ -147,6 +161,148 @@ impl SGInterp {
         }
     }
 
+    pub fn reconstruct_stackmap(&self, btmframeaddr: *mut c_void) -> u64 {
+        println!("current_pc: {:?}", self.pc.as_str());
+        let sm = unsafe { Value::new(LLVMGetPreviousInstruction(self.pc.get())) };
+
+        let idop = sm.get_operand(0);
+        let id: u64 = unsafe { LLVMConstIntGetZExtValue(idop.get()) };
+        println!("id: {:?}", id);
+
+        println!("Parse AOT stackmap.");
+        let pathb = env::current_exe().unwrap();
+        let file = fs::File::open(&pathb.as_path()).unwrap();
+        let mmap = unsafe { memmap2::Mmap::map(&file).unwrap() };
+        let object = object::File::parse(&*mmap).unwrap();
+        let sec = object.section_by_name(".llvm_stackmaps").unwrap();
+        println!("{} {}", sec.address(), sec.size());
+
+        let mut registers = vec![0; 16];
+        let mut frame: Vec<StackEntry> = Vec::new();
+        let mut stacksize = 0;
+
+        // XXX QUESTION:
+        // Do we ever need to update the bottom frame? If the JIT does anything to that frame
+        // directly, its already there.
+
+        let slice = unsafe { slice::from_raw_parts(sec.address() as *mut u8, usize::try_from(sec.size()).unwrap()) };
+        println!("JUST BEFORE =======================================================");
+        let (offset, locs) = StackMapParser::find(slice, id).unwrap();
+        for (i, l) in locs.iter().skip(0).enumerate() {
+            let op = sm.get_operand(u32::try_from(i+2).unwrap());
+            println!("AOT VAR: {:?}", op.as_str());
+            let val = if let Some(val) = self.frames.last().unwrap().get(&op) {
+                val.val
+            } else {
+                println!("probably return pointer which will disappear");
+                continue;
+            };
+            match l {
+                SMLocation::Register(reg, size) => {
+                    registers[usize::from(*reg)] = val;
+                    println!("Reg: {} {} {}", reg, val, size);
+                }
+                SMLocation::Direct(reg, off, size) => {
+                    let p = unsafe { btmframeaddr.offset(isize::try_from(*off).unwrap()) };
+                    println!("addr: {:?}", p);
+                    // Offset for bottom frame should always be in regards to RBP.
+                    assert_eq!(*reg, 6);
+                    match size {
+                        8 => {
+                            println!("read: {:x}", unsafe { ptr::read(p as *mut u64) });
+                            //ptr::write(p as *mut u8, val)
+                        }
+                        _ => { }
+                    }
+                    println!("Direct: {} {} {} {:x}", reg, off, size, val);
+                    // If aot var is a pointer, get actual size and copy over data from JIT stack
+                    //frame.push(StackEntry {reg: *reg, off: *off, size: *size, val});
+                    stacksize += size * 8;
+                }
+                SMLocation::Indirect(reg, off, size) => {
+                    println!("Indirect: {} {}", reg, off);
+                }
+                SMLocation::Constant(v) => {
+                    println!("Constant: {}", v);
+                }
+                SMLocation::LargeConstant(_v) => {
+                    todo!();
+                }
+            }
+        }
+
+        // Create MMap
+        let memsize = 1024; // XXX calculate
+        let mut mmap = memmap2::MmapMut::map_anon(memsize).unwrap();
+        let mut ptr = mmap.as_mut().as_ptr();
+
+        // Number of stack updates in bottom frame.
+        //unsafe {
+        //    ptr::write(ptr as *mut usize, frame.len());
+        //    ptr = ptr.offset(isize::try_from(std::mem::size_of::<usize>()).unwrap());
+        //}
+
+        // Stack entries
+        //for se in frame {
+        //    unsafe {
+        //        ptr::write(ptr as *mut u16, se.reg);
+        //        ptr = ptr.offset(isize::try_from(std::mem::size_of::<u16>()).unwrap());
+        //        ptr::write(ptr as *mut i32, se.off);
+        //        ptr = ptr.offset(isize::try_from(std::mem::size_of::<i32>()).unwrap());
+        //        ptr::write(ptr as *mut u16, se.size);
+        //        ptr = ptr.offset(isize::try_from(std::mem::size_of::<u16>()).unwrap());
+        //        ptr::write(ptr as *mut u64, se.val);
+        //        ptr = ptr.offset(isize::try_from(std::mem::size_of::<u64>()).unwrap());
+        //    }
+        //}
+
+        // Write reconstructed frames.
+        // FIXME: Leave empty for now.
+        println!("NEW STACKMAP:");
+        //unsafe {
+        //    ptr::write(ptr as *mut usize, 0);
+        //    ptr = ptr.offset(isize::try_from(std::mem::size_of::<usize>()).unwrap());
+        //}
+
+        // Write active registers
+        for reg in [3, 12, 13, 14, 15] {
+            unsafe {
+                ptr::write(ptr as *mut u64, registers[reg]);
+                ptr = ptr.offset(isize::try_from(std::mem::size_of::<u64>()).unwrap());
+            }
+        }
+
+        // Push return addr, from where to continue running AOT code.
+        unsafe {
+            println!("offset: {:x}", offset);
+            ptr::write(ptr as *mut u64, offset);
+            ptr = ptr.offset(isize::try_from(std::mem::size_of::<u64>()).unwrap());
+        }
+
+
+        mmap.flush().expect("Lots of poop.");
+        let rtnptr = mmap.as_ref().as_ptr();
+        std::mem::forget(mmap);
+
+
+
+        // We got:
+        //    SM: JIT Value -> native value
+        //    Mapping: JIT Value -> AOT Value
+        // Need:
+        //    AOT Value -> stack/register location
+        //
+        // 1) Get live AOT Values from stackmap call.
+        // 2) Match live AOT Vals to stackmap
+        // 3) Match live live JIT Vals to AOT Vals
+        // 4) Copy JIT Vals values into AOT Vals locations.
+        //
+        // In future, can skip JIT -> AOT and directly move from JIT register to AOT register?
+
+        println!("sm: {:?}", sm.as_str());
+        return rtnptr as u64;
+    }
+
     /// Add a live variable and its value to the current frame.
     pub fn var_init(
         &mut self,
@@ -167,7 +323,11 @@ impl SGInterp {
             // the control point. See `get_aot_original` for more details.
             None
         };
+        println!("init: {:?}", instr.as_str());
         let ty = instr.get_type();
+        if let Some(org) = orgaot {
+            println!("initaot: {:?}", org.as_str());
+        }
         let value = SGValue::new(val, ty);
         self.frames.get_mut(sfidx).unwrap().add(instr, value);
         if let Some(v) = orgaot {
@@ -537,6 +697,7 @@ impl SGInterp {
             None
         } else {
             let op = self.pc.get_operand(0);
+            println!("ret op: {:?}", op.as_str());
             Some(self.var_lookup(&op))
         };
         if self.frames.len() == 1 {

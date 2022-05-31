@@ -9,7 +9,14 @@ license = "Apache-2.0 OR MIT"
 libc = "0.2.97"
 libffi = "3.0.0"
 ykutil = { path = "../ykutil" }
+yksmp = { path = "../yksmp" }
 llvm-sys = "130"
+memmap2 = "0.5.2"
+
+[dependencies.object]
+version = "0.28.3"
+default-features = false
+features = ["read_core", "elf"]
 
 [features]
 c_testing = []

@@ -17,7 +17,8 @@ struct Function {
 }
 
 struct Record {
-    offset: u32,
+    id: u64,
+    offset: u64,
     locs: Vec<Location>,
 }
 
@@ -40,10 +41,26 @@ pub struct StackMapParser<'a> {
 impl StackMapParser<'_> {
     pub fn parse(data: &[u8]) -> Result<HashMap<u64, Vec<Location>>, Box<dyn error::Error>> {
         let mut smp = StackMapParser { data, offset: 0 };
-        smp.read()
+        let records = smp.read()?;
+        let mut map = HashMap::new();
+        for r in records {
+            map.insert(r.offset, r.locs);
+        }
+        Ok(map)
     }
 
-    fn read(&mut self) -> Result<HashMap<u64, Vec<Location>>, Box<dyn error::Error>> {
+    pub fn find(data: &[u8], id: u64) -> Option<(u64, Vec<Location>)> {
+        let mut smp = StackMapParser { data, offset: 0 };
+        let records = smp.read().expect("Failed to parse stackmap.");
+        for r in records {
+            if r.id == id {
+                return Some((r.offset, r.locs))
+            }
+        }
+        None
+    }
+
+    fn read(&mut self) -> Result<Vec<Record>, Box<dyn error::Error>> {
         // Read version number.
         if self.read_u8() != 3 {
             return Err("Only stackmap format version 3 is supported.".into());
@@ -60,7 +77,6 @@ impl StackMapParser<'_> {
         let funcs = self.read_functions(num_funcs);
         let consts = self.read_consts(num_consts);
 
-        let mut map = HashMap::new();
 
         // Check that the records match the sum of the expected records per function.
         assert_eq!(
@@ -68,23 +84,28 @@ impl StackMapParser<'_> {
             u64::from(num_recs)
         );
 
+        let mut recs = Vec::new();
+
         // Parse records.
         for f in funcs {
             let records = self.read_records(f.record_count, &consts);
-            for r in records {
-                let key = f.addr + u64::from(r.offset);
-                map.insert(key, r.locs);
+            for mut r in records {
+                r.offset = f.addr + u64::from(r.offset);
+                recs.push(r);
             }
         }
 
-        Ok(map)
+        // Read prologue info.
+        self.read_prologue();
+        Ok(recs)
     }
 
     fn read_functions(&mut self, num: u32) -> Vec<Function> {
         let mut v = Vec::new();
         for _ in 0..num {
             let addr = self.read_u64();
-            let _stack_size = self.read_u64();
+            let stack_size = self.read_u64();
+            println!("stack_size: {}", stack_size);
             let record_count = self.read_u64();
             v.push(Function { addr, record_count });
         }
@@ -102,8 +123,8 @@ impl StackMapParser<'_> {
     fn read_records(&mut self, num: u64, consts: &[u64]) -> Vec<Record> {
         let mut v = Vec::new();
         for _ in 0..num {
-            let _id = self.read_u64();
-            let offset = self.read_u32();
+            let id = self.read_u64();
+            let offset = u64::from(self.read_u32());
             self.read_u16();
             let num_locs = self.read_u16();
             let locs = self.read_locations(num_locs, consts);
@@ -113,7 +134,7 @@ impl StackMapParser<'_> {
             let num_liveouts = self.read_u16();
             self.read_liveouts(num_liveouts);
             self.align_8();
-            v.push(Record { offset, locs });
+            v.push(Record { id, offset, locs });
         }
         v
     }
@@ -160,6 +181,22 @@ impl StackMapParser<'_> {
         for _ in 0..num {
             let _dwreg = self.read_u16();
             let _size = self.read_u8();
+        }
+    }
+
+    fn read_prologue(&mut self) {
+        println!("Read prologue:");
+        let hasfptr = self.read_u8();
+        println!("hasptr: {}", hasfptr);
+        self.read_u8(); // Padding
+        let numspills = self.read_u32();
+        println!("numspills: {}", numspills);
+
+        for i in 0..numspills {
+            let reg = self.read_u16();
+            self.read_u16(); // Padding
+            let off = self.read_i32();
+            println!("Spill: {} {}", reg, off);
         }
     }
 

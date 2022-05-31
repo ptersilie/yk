@@ -242,7 +242,7 @@ impl CompiledTrace {
     /// Until we've figured out how to restore only the used registers we take the sledge hammer
     /// approach and save and restore all CSRs here.
     /// OPT: Find a way to only restore needed registers (ideally right within the deopt code).
-    pub extern "C" fn exec(&self, ctrlp_vars: *mut c_void, returnval: *mut c_void) -> u8 {
+    pub extern "C" fn exec(&self, ctrlp_vars: *mut c_void, returnval: *mut c_void) -> u64 {
         unsafe {
             asm!(
                 "push rbx",
@@ -267,13 +267,13 @@ impl CompiledTrace {
     }
 
     #[no_mangle]
-    extern "C" fn real_exec(&self, ctrlp_vars: *mut c_void, returnval: *mut c_void) -> u8 {
+    extern "C" fn real_exec(&self, ctrlp_vars: *mut c_void, returnval: *mut c_void) -> u64 {
         #[cfg(feature = "yk_testing")]
         assert_ne!(self.entry as *const (), std::ptr::null());
         unsafe {
             let f = mem::transmute::<
                 _,
-                unsafe extern "C" fn(*mut c_void, *const c_void, usize, *mut c_void) -> u8,
+                unsafe extern "C" fn(*mut c_void, *const c_void, usize, *mut c_void) -> u64,
             >(self.entry);
             f(ctrlp_vars, self.smptr, self.smsize, returnval)
         }
