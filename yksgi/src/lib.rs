@@ -15,6 +15,7 @@ use std::io::Write;
 use memmap2;
 use object::{Object, ObjectSection};
 use yksmp::{Location as SMLocation, StackMapParser};
+use capstone::prelude::*;
 
 mod llvmbridge;
 use llvmbridge::{get_aot_original, BasicBlock, Module, Type, Value};
@@ -144,11 +145,16 @@ impl SGInterp {
         // Initialise frames.
         let mut frames = Vec::with_capacity(activeframes.len());
         for frame in activeframes {
+            println!("Frame:");
             let funcname = std::ffi::CStr::from_ptr(frame.fname);
             let func = module.function(funcname.as_ptr());
+            println!("{:?}", funcname);
             let bb = func.bb(frame.bbidx);
             let instr = bb.instruction(frame.instridx);
+            println!("{:?}", instr.as_str());
             frames.push(Frame::new(instr));
+            let sm = unsafe { Value::new(LLVMGetPreviousInstruction(instr.get())) };
+            println!("{:?}", sm.as_str());
         }
         // Create and initialise stop gap interpreter.
         let current_pc = frames.last().unwrap().pc;
@@ -172,13 +178,24 @@ impl SGInterp {
         println!("Parse AOT stackmap.");
         let pathb = env::current_exe().unwrap();
         let file = fs::File::open(&pathb.as_path()).unwrap();
-        let mmap = unsafe { memmap2::Mmap::map(&file).unwrap() };
-        let object = object::File::parse(&*mmap).unwrap();
+        let exemmap = unsafe { memmap2::Mmap::map(&file).unwrap() };
+        let object = object::File::parse(&*exemmap).unwrap();
         let sec = object.section_by_name(".llvm_stackmaps").unwrap();
         println!("{} {}", sec.address(), sec.size());
+        let text = object.section_by_name(".text").unwrap();
+
+        // Create capstone dissassembler so we can figure out the size of the instruction we return
+        // too in order to adjust the return address in our reconstructed stackmap.
+        let cs = Capstone::new()
+        .x86()
+        .mode(arch::x86::ArchMode::Mode64)
+        .syntax(arch::x86::ArchSyntax::Att)
+        .detail(true)
+        .build()
+        .expect("Failed to create Capstone object");
 
         let mut registers = vec![0; 16];
-        let mut frame: Vec<StackEntry> = Vec::new();
+        //let mut frame: Vec<StackEntry> = Vec::new();
         let mut stacksize = 0;
 
         // XXX QUESTION:
@@ -186,55 +203,183 @@ impl SGInterp {
         // directly, its already there.
 
         let slice = unsafe { slice::from_raw_parts(sec.address() as *mut u8, usize::try_from(sec.size()).unwrap()) };
+        let smentries = StackMapParser::by_id(slice);
         println!("JUST BEFORE =======================================================");
-        let (offset, locs) = StackMapParser::find(slice, id).unwrap();
-        for (i, l) in locs.iter().skip(0).enumerate() {
-            let op = sm.get_operand(u32::try_from(i+2).unwrap());
-            println!("AOT VAR: {:?}", op.as_str());
-            let val = if let Some(val) = self.frames.last().unwrap().get(&op) {
-                val.val
-            } else {
-                println!("probably return pointer which will disappear");
-                continue;
-            };
-            match l {
-                SMLocation::Register(reg, size) => {
-                    registers[usize::from(*reg)] = val;
-                    println!("Reg: {} {} {}", reg, val, size);
-                }
-                SMLocation::Direct(reg, off, size) => {
-                    let p = unsafe { btmframeaddr.offset(isize::try_from(*off).unwrap()) };
-                    println!("addr: {:?}", p);
-                    // Offset for bottom frame should always be in regards to RBP.
-                    assert_eq!(*reg, 6);
-                    match size {
-                        8 => {
-                            println!("read: {:x}", unsafe { ptr::read(p as *mut u64) });
-                            //ptr::write(p as *mut u8, val)
-                        }
-                        _ => { }
-                    }
-                    println!("Direct: {} {} {} {:x}", reg, off, size, val);
-                    // If aot var is a pointer, get actual size and copy over data from JIT stack
-                    //frame.push(StackEntry {reg: *reg, off: *off, size: *size, val});
-                    stacksize += size * 8;
-                }
-                SMLocation::Indirect(reg, off, size) => {
-                    println!("Indirect: {} {}", reg, off);
-                }
-                SMLocation::Constant(v) => {
-                    println!("Constant: {}", v);
-                }
-                SMLocation::LargeConstant(_v) => {
-                    todo!();
-                }
-            }
-        }
 
         // Create MMap
-        let memsize = 1024; // XXX calculate
+        let mut memsize: usize = 5 * 8; // First 8 bytes are for register recovery and address of top frame.
+        // Collect stackmaps
+        let mut smaps = Vec::new();
+
+        // Skip the first frame, which is the bottom of the stack from where the control point is
+        // called. The frame still exists and thus doesn't need to be reconstructed.
+        let mut offset = 0;
+        for (i, frame) in self.frames.iter().enumerate() {
+            println!("NEW FRAME");
+            let smcall = unsafe { Value::new(LLVMGetPreviousInstruction(frame.pc.get())) };
+            let smid = unsafe { LLVMConstIntGetZExtValue(smcall.get_operand(0).get()) };
+            // Find prologue info and stackmap record for this frame.
+            let mut pinfo = None;
+            let mut rec = None;
+            for entry in &smentries {
+                for r in &entry.records {
+                    if r.id == smid {
+                        println!("here: {:?}", &entry.pinfo.csrs);
+                        pinfo = Some(&entry.pinfo);
+                        rec = Some(r);
+                        break;
+                    }
+                }
+            };
+            let rec = rec.unwrap();
+            let pinfo = pinfo.unwrap();
+            if i > 0 {
+                // Don't include bottom frame in stack size.
+                memsize += usize::try_from(rec.size).unwrap();
+            }
+            // Push a return address for each frame.
+            memsize += 8;
+            smaps.push((i, frame, rec, pinfo));
+        }
+
+        // Now that we've calculated the stacks size, reserve space for it.
+        println!("Create stack of size {}", memsize);
         let mut mmap = memmap2::MmapMut::map_anon(memsize).unwrap();
         let mut ptr = mmap.as_mut().as_ptr();
+
+
+        let layout = self.module.datalayout();
+
+        // We need to recreate stack from the bottom up, so spilled registers have the correct
+        // value at the time they are pushed to the stack. This means we need to write to the mmap
+        // from the back.
+        // Since the bottom frame already exists we only care about it's register values.
+
+        let mut rbp = unsafe { ptr.offset(isize::try_from(memsize).unwrap()) };
+        let mut rsp = rbp;
+        let mut prevframe = btmframeaddr;
+        let mut nextframe = btmframeaddr;
+        // keep track of both current RBP and current RSP
+        for (i, frame, rec, pinfo) in smaps {
+            println!("+++ FRAME #{}", i);
+            println!("hasfp: {}", pinfo.hasfp);
+            println!("csrs: {:?}", pinfo.csrs);
+            println!("size: {}", rec.size);
+            println!("offset: {}", rec.offset);
+            println!("rsp: {:?}", rsp);
+
+            // 1. Push rbp if needed
+            if pinfo.hasfp && i > 0 {
+                println!("mov rbp, rsp ({:?} => {:?})", rbp, rsp);
+                rsp = unsafe { rsp.offset(-8) };
+                rbp = rsp;
+                unsafe { ptr::write(rsp as *mut u64, prevframe as u64) };
+                println!("Write RBP {:x?} to offset {:?}", prevframe, rsp);
+            }
+
+            prevframe = nextframe;
+            // The next frame's stack is the current frame addr - the current frame's size - 8
+            // bytes for the return address.
+            nextframe = unsafe { prevframe.offset(-isize::try_from(rec.size).unwrap() - 8) };
+
+            // 2. push csrs
+            if i > 0 {
+                for (reg, idx) in &pinfo.csrs {
+                    let tmp = unsafe { rbp.offset(isize::try_from(idx * 8).unwrap()) };
+                    let val = registers[usize::from(*reg)];
+                    unsafe { ptr::write(tmp as *mut u64, val) };
+                    println!("Write value {} in register {} to index {}", val, reg, idx);
+                }
+            }
+
+            // 3. push smlocations
+
+            //let rec = &recs[&id];
+            let smcall = unsafe { Value::new(LLVMGetPreviousInstruction(frame.pc.get())) };
+            for (j, l) in rec.locs.iter().skip(0).enumerate() {
+                let op = smcall.get_operand(u32::try_from(j+2).unwrap());
+                let val = if let Some(val) = frame.get(&op) {
+                    val.val
+                } else {
+                    println!("probably return pointer which will disappear");
+                    continue;
+                };
+                match l {
+                    SMLocation::Register(reg, size) => {
+                        registers[usize::from(*reg)] = val;
+                        println!("AOT VAR: {:?}", op.as_str());
+                        println!("Reg: {} {:x} {}", reg, val, size);
+                    }
+                    SMLocation::Direct(reg, off, _) => {
+                        if i == 0 {
+                            // skip first frame
+                            continue;
+                        }
+                        println!("AOT VAR: {:?}", op.as_str());
+                        // We know all direct locations are pointers so get the size of the target.
+                        let eltype = op.get_type().get_element_type().get();
+                        let size = i64::try_from(unsafe { LLVMABISizeOfType(layout, eltype)}).unwrap();
+                        println!("size: {}", size);
+                        // Offset for bottom frame should always be in regards to RBP.
+                        // XXX read source then write to stackmap
+                        println!("Direct: {} {} {} {:x}", reg, off, size, val);
+                        assert_eq!(*reg, 6);
+                        let temp = unsafe { rbp.offset(isize::try_from(*off).unwrap()) };
+                        match size {
+                            4 => {
+                                let dval = unsafe { ptr::read(val as *mut u32) };
+                                println!("Write {:x} to RBP {} = {:?}", dval, off, temp);
+                                unsafe { ptr::write(temp as *mut u32, dval as u32) };
+                            }
+                            8 => {
+                                unsafe { ptr::write(temp as *mut u64, val) };
+                            }
+                            _ => { }
+                        }
+
+                        // If aot var is a pointer, get actual size and copy over data from JIT stack
+                        //frame.push(StackEntry {reg: *reg, off: *off, size: *size, val});
+                        stacksize += size * 8;
+                    }
+                    SMLocation::Indirect(reg, off, size) => {
+                        println!("Indirect: {} {}", reg, off);
+                    }
+                    SMLocation::Constant(v) => {
+                        println!("Constant: {}", v);
+                    }
+                    SMLocation::LargeConstant(_v) => {
+                        todo!();
+                    }
+                }
+            }
+            if i > 0 {
+                // Note: pushed RBP is included in this, but not the return address.
+                println!("Adjust RSP by -{}", rec.size);
+                // XXX prevframe = prevframe - rec.size
+                rsp = unsafe { rbp.offset(-isize::try_from(rec.size).unwrap())};
+                if pinfo.hasfp {
+                    // Since a pushed RBP is included in the record size, we need to add it back if
+                    // it was pushed.
+                    rsp = unsafe { rsp.offset(8)};
+                }
+            }
+            // Write return address for current frame.
+            // 4. push return address
+            // foo: test al, 1: a801 7502 @ 0x14e0=5344 in binary
+            rsp = unsafe { rsp.offset(-8) };
+            let instr_offset = usize::try_from(rec.offset - text.address()).unwrap();
+            println!("{:x} {:x} {:x}", rec.offset, text.address(), instr_offset);
+            let instrs = cs.disasm_count(&text.data().unwrap()[instr_offset..], 0, 1).expect("Couldn't disasm.");
+            let instr = instrs.first().unwrap();
+            println!("instr: {:?}", instr);
+            unsafe {
+                println!("Write return address {:x}+{:x} to {:?}", rec.offset, instr.len(), rsp);
+                // XXX this is the address of the call. we need to jump one instruction
+                // further!
+                ptr::write(rsp as *mut u64, rec.offset + u64::try_from(instr.len()).unwrap());
+            }
+
+        }
 
         // Number of stack updates in bottom frame.
         //unsafe {
@@ -266,18 +411,19 @@ impl SGInterp {
 
         // Write active registers
         for reg in [3, 12, 13, 14, 15] {
+            rsp = unsafe { rsp.offset(-8) };
             unsafe {
-                ptr::write(ptr as *mut u64, registers[reg]);
-                ptr = ptr.offset(isize::try_from(std::mem::size_of::<u64>()).unwrap());
+                println!("Write register {} ({}) to offset {:?}", reg, registers[reg], rsp);
+                ptr::write(rsp as *mut u64, registers[reg]);
             }
         }
 
-        // Push return addr, from where to continue running AOT code.
-        unsafe {
-            println!("offset: {:x}", offset);
-            ptr::write(ptr as *mut u64, offset);
-            ptr = ptr.offset(isize::try_from(std::mem::size_of::<u64>()).unwrap());
-        }
+        //// Push return addr, from where to continue running AOT code.
+        //unsafe {
+        //    println!("offset: {:x}", offset);
+        //    ptr::write(ptr as *mut u64, offset);
+        //    ptr = ptr.offset(isize::try_from(std::mem::size_of::<u64>()).unwrap());
+        //}
 
 
         mmap.flush().expect("Lots of poop.");
@@ -329,6 +475,7 @@ impl SGInterp {
             println!("initaot: {:?}", org.as_str());
         }
         let value = SGValue::new(val, ty);
+        println!("value: {:x}", val);
         self.frames.get_mut(sfidx).unwrap().add(instr, value);
         if let Some(v) = orgaot {
             self.frames.get_mut(sfidx).unwrap().add(v, value);

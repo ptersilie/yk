@@ -151,17 +151,17 @@ pub extern "C" fn __ykrt_reconstruct_frames(
     unsafe {
         asm!(
             // Copy over the new frames.
-            "sub rsp, 48",
+            "sub rsp, 112",
             "mov rsi, rdi",
             "mov rdi, rsp",
-            "mov rdx, 48",
+            "mov rdx, 112",
             "call memcpy",
             // Restore callee saved registers.
-            "pop rbx",
-            "pop r12",
-            "pop r13",
-            "pop r14",
             "pop r15",
+            "pop r14",
+            "pop r13",
+            "pop r12",
+            "pop rbx",
             "ret",
             options(noreturn)
         )
@@ -208,6 +208,7 @@ pub extern "C" fn yk_stopgap(
     // Extract live values from the stackmap.
     // Skip first 3 locations as they don't relate to any of our live variables.
     for (i, l) in locs.iter().skip(SM_REC_HEADER).enumerate() {
+        println!("--");
         match l {
             SMLocation::Register(reg, _size) => {
                 let _val = unsafe { registers.get(*reg) };
@@ -220,6 +221,7 @@ pub extern "C" fn yk_stopgap(
                 let addr = unsafe { registers.get(*reg) as *mut u8 };
                 let addr = unsafe { addr.offset(isize::try_from(*off).unwrap()) };
                 let aot = &aotmap[i];
+                println!("direct addr: {:?}", addr);
                 unsafe {
                     sginterp.var_init(
                         aot.bbidx,
@@ -233,6 +235,7 @@ pub extern "C" fn yk_stopgap(
             SMLocation::Indirect(reg, off, size) => {
                 let addr = unsafe { registers.get(*reg) as *mut u8 };
                 let addr = unsafe { addr.offset(isize::try_from(*off).unwrap()) };
+                println!("direct addr: {:?}", addr);
                 let v = match *size {
                     1 => unsafe { ptr::read::<u8>(addr as *mut u8) as u64 },
                     2 => unsafe { ptr::read::<u16>(addr as *mut u16) as u64 },
@@ -253,6 +256,7 @@ pub extern "C" fn yk_stopgap(
             }
             SMLocation::Constant(v) => {
                 let aot = &aotmap[i];
+                println!("const");
                 unsafe {
                     sginterp.var_init(
                         aot.bbidx,

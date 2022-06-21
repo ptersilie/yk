@@ -148,6 +148,7 @@ fn mk_compiler(exe: &Path, src: &Path, opt: &str, extra_objs: &[PathBuf]) -> Com
         src.to_str().unwrap(),
     ]);
     compiler.args(extra_objs);
+    dbg!(&compiler);
     compiler
 }
 

@@ -14,12 +14,15 @@ use std::error;
 struct Function {
     addr: u64,
     record_count: u64,
+    stack_size: u64,
 }
 
-struct Record {
-    id: u64,
-    offset: u64,
-    locs: Vec<Location>,
+pub struct Record {
+    pub id: u64,
+    pub offset: u64,
+    pub locs: Vec<Location>,
+    pub size: u64,
+    pub pinfo: Option<PrologueInfo>,
 }
 
 #[derive(Debug)]
@@ -29,6 +32,16 @@ pub enum Location {
     Indirect(u16, i32, u16),
     Constant(u32),
     LargeConstant(u64),
+}
+
+pub struct PrologueInfo {
+    pub hasfp: bool,
+    pub csrs: Vec<(u16, i32)>,
+}
+
+pub struct SMEntry {
+    pub pinfo: PrologueInfo,
+    pub records: Vec<Record>,
 }
 
 /// Parses LLVM stackmaps version 3 from a given address. Provides a way to query relevant
@@ -41,26 +54,30 @@ pub struct StackMapParser<'a> {
 impl StackMapParser<'_> {
     pub fn parse(data: &[u8]) -> Result<HashMap<u64, Vec<Location>>, Box<dyn error::Error>> {
         let mut smp = StackMapParser { data, offset: 0 };
-        let records = smp.read()?;
+        let entries = smp.read()?;
         let mut map = HashMap::new();
-        for r in records {
-            map.insert(r.offset, r.locs);
+        for sme in entries {
+            for r in sme.records {
+                map.insert(r.offset, r.locs);
+            }
         }
         Ok(map)
     }
 
-    pub fn find(data: &[u8], id: u64) -> Option<(u64, Vec<Location>)> {
+    pub fn by_id(data: &[u8]) -> Vec<SMEntry> {
         let mut smp = StackMapParser { data, offset: 0 };
-        let records = smp.read().expect("Failed to parse stackmap.");
-        for r in records {
-            if r.id == id {
-                return Some((r.offset, r.locs))
-            }
-        }
-        None
+        let entries = smp.read().expect("Failed to parse stackmap.");
+        //let mut map = HashMap::new();
+        //for sme in records {
+        //    map.insert(r.id, r);
+            //if r.id == id {
+            //    return Some((r.offset, r.locs))
+            //}
+        //}
+        entries
     }
 
-    fn read(&mut self) -> Result<Vec<Record>, Box<dyn error::Error>> {
+    fn read(&mut self) -> Result<Vec<SMEntry>, Box<dyn error::Error>> {
         // Read version number.
         if self.read_u8() != 3 {
             return Err("Only stackmap format version 3 is supported.".into());
@@ -87,17 +104,27 @@ impl StackMapParser<'_> {
         let mut recs = Vec::new();
 
         // Parse records.
-        for f in funcs {
-            let records = self.read_records(f.record_count, &consts);
-            for mut r in records {
+        for f in &funcs {
+            let mut records = self.read_records(f.record_count, &consts);
+            for mut r in &mut records {
                 r.offset = f.addr + u64::from(r.offset);
-                recs.push(r);
+                r.size = f.stack_size;
             }
+            recs.push(records);
         }
 
         // Read prologue info.
-        self.read_prologue();
-        Ok(recs)
+        let mut ps = self.read_prologue(num_funcs);
+
+        let mut smentries = Vec::new();
+        //*for i in 0..funcs.len() {
+        //for (i, pinfo) in ps.drain(..).enumerate() {
+        for records in recs.into_iter().rev() {
+            let pinfo = ps.pop().unwrap();
+            println!("pop: {:?}", pinfo.csrs);
+            smentries.push(SMEntry { pinfo, records });
+        }
+        Ok(smentries)
     }
 
     fn read_functions(&mut self, num: u32) -> Vec<Function> {
@@ -105,9 +132,8 @@ impl StackMapParser<'_> {
         for _ in 0..num {
             let addr = self.read_u64();
             let stack_size = self.read_u64();
-            println!("stack_size: {}", stack_size);
             let record_count = self.read_u64();
-            v.push(Function { addr, record_count });
+            v.push(Function { addr, record_count, stack_size });
         }
         v
     }
@@ -134,7 +160,7 @@ impl StackMapParser<'_> {
             let num_liveouts = self.read_u16();
             self.read_liveouts(num_liveouts);
             self.align_8();
-            v.push(Record { id, offset, locs });
+            v.push(Record { id, offset, locs, size: 0, pinfo: None });
         }
         v
     }
@@ -184,20 +210,29 @@ impl StackMapParser<'_> {
         }
     }
 
-    fn read_prologue(&mut self) {
-        println!("Read prologue:");
-        let hasfptr = self.read_u8();
-        println!("hasptr: {}", hasfptr);
-        self.read_u8(); // Padding
-        let numspills = self.read_u32();
-        println!("numspills: {}", numspills);
+    fn read_prologue(&mut self, num_funcs: u32) -> Vec<PrologueInfo> {
+        let mut pis = Vec::new();
+        for _ in 0..num_funcs {
+            println!("Read prologue:");
+            let hasfptr = self.read_u8();
+            assert!(hasfptr == 0 || hasfptr == 1);
+            println!("hasptr: {}", hasfptr);
+            self.read_u8(); // Padding
+            let numspills = self.read_u32();
+            println!("numspills: {}", numspills);
 
-        for i in 0..numspills {
-            let reg = self.read_u16();
-            self.read_u16(); // Padding
-            let off = self.read_i32();
-            println!("Spill: {} {}", reg, off);
+            let mut v = Vec::new();
+            for _ in 0..numspills {
+                let reg = self.read_u16();
+                self.read_u16(); // Padding
+                let off = self.read_i32();
+                v.push((reg, off));
+                println!("Spill: {} {}", reg, off);
+            }
+            let pi = PrologueInfo { hasfp: hasfptr != 0, csrs: v };
+            pis.push(pi);
         }
+        pis
     }
 
     fn align_8(&mut self) {
