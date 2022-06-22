@@ -59,12 +59,6 @@ int main(int argc, char **argv) {
   yk_mt_hot_threshold_set(mt, 0);
   YkLocation loc = yk_location_new();
 
-  int bla = 6;
-  while (bla > 0) {
-    int *laurie = alloca(20);
-    *laurie = 3;
-    bla--;
-  }
   int res = 9998;
   int i = 4;
   NOOPT_VAL(loc);

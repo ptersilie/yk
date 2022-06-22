@@ -150,11 +150,15 @@ pub extern "C" fn __ykrt_reconstruct_frames(
 ) {
     unsafe {
         asm!(
-            // Copy over the new frames.
-            "sub rsp, 112",
+            // Move size of new stack into rdx.
+            "mov rdx, [rdi]",
+            // Then adjust the address to where the stack actually starts.
+            "add rdi, 8",
+            // Make space for the new stack.
+            "sub rsp, rdx",
+            // Copy over the new stack frames.
             "mov rsi, rdi",
             "mov rdi, rsp",
-            "mov rdx, 112",
             "call memcpy",
             // Restore callee saved registers.
             "pop r15",
@@ -162,7 +166,10 @@ pub extern "C" fn __ykrt_reconstruct_frames(
             "pop r13",
             "pop r12",
             "pop rbx",
-            "ret",
+            // Load jump from stack and jump to it.
+            "add rsp, 8",
+            "jmp [rsp-8]",
+            //"ret",
             options(noreturn)
         )
     }

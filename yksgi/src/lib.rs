@@ -242,6 +242,10 @@ impl SGInterp {
             smaps.push((i, frame, rec, pinfo));
         }
 
+        // Add space for the size of the final stack which we store at the bottom of the
+        // stack. We'll need the size later on to memcpy the new stack over.
+        memsize += 8;
+
         // Now that we've calculated the stacks size, reserve space for it.
         println!("Create stack of size {}", memsize);
         let mut mmap = memmap2::MmapMut::map_anon(memsize).unwrap();
@@ -416,6 +420,13 @@ impl SGInterp {
                 println!("Write register {} ({}) to offset {:?}", reg, registers[reg], rsp);
                 ptr::write(rsp as *mut u64, registers[reg]);
             }
+        }
+
+        // Push the stack's size to the stack so we can extract it later to memcpy the right
+        // amount.
+        unsafe {
+            rsp = unsafe { rsp.offset(-8) };
+            ptr::write(rsp as *mut u64, (memsize-8) as u64);
         }
 
         //// Push return addr, from where to continue running AOT code.
