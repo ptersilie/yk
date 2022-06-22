@@ -154,7 +154,9 @@ pub extern "C" fn __ykrt_reconstruct_frames(
             "mov rdx, [rdi]",
             // Then adjust the address to where the stack actually starts.
             "add rdi, 8",
-            // Make space for the new stack.
+            // Make space for the new stack, but use 8 bytes less in order to overwrite this
+            // function's return address since we won't be returning there.
+            "add rsp, 8",
             "sub rsp, rdx",
             // Copy over the new stack frames.
             "mov rsi, rdi",
@@ -166,7 +168,7 @@ pub extern "C" fn __ykrt_reconstruct_frames(
             "pop r13",
             "pop r12",
             "pop rbx",
-            // Load jump from stack and jump to it.
+            // Load new return address from stack and jump to it.
             "add rsp, 8",
             "jmp [rsp-8]",
             //"ret",

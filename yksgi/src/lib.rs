@@ -370,17 +370,27 @@ impl SGInterp {
             // Write return address for current frame.
             // 4. push return address
             // foo: test al, 1: a801 7502 @ 0x14e0=5344 in binary
+            // For calls we want don't want to return to the address just before the call
+            // so we don't execute the call twice.
+            // For icmp's however we need to re-execute the instruction (e.g. test) in
+            // order to reset the correct flags for the inevitably following jump
+            // instruction.
             rsp = unsafe { rsp.offset(-8) };
             let instr_offset = usize::try_from(rec.offset - text.address()).unwrap();
             println!("{:x} {:x} {:x}", rec.offset, text.address(), instr_offset);
             let instrs = cs.disasm_count(&text.data().unwrap()[instr_offset..], 0, 1).expect("Couldn't disasm.");
             let instr = instrs.first().unwrap();
+            let offset = if instr.mnemonic() == Some("callq") {
+                rec.offset + u64::try_from(instr.len()).unwrap()
+            } else {
+                rec.offset
+            };
             println!("instr: {:?}", instr);
             unsafe {
-                println!("Write return address {:x}+{:x} to {:?}", rec.offset, instr.len(), rsp);
+                println!("Write return address {:x}+{:x} ({:x}) to {:?}", rec.offset, instr.len(), offset, rsp);
                 // XXX this is the address of the call. we need to jump one instruction
                 // further!
-                ptr::write(rsp as *mut u64, rec.offset + u64::try_from(instr.len()).unwrap());
+                ptr::write(rsp as *mut u64, offset);
             }
 
         }
