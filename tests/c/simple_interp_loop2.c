@@ -1,5 +1,5 @@
 // Run-time:
-//   env-var: YKD_PRINT_IR=jit-pre-opt
+//   env-var: YKD_PRINT_IR=aot
 //   env-var: YKD_SERIALISE_COMPILATION=1
 //   env-var: YKD_PRINT_JITSTATE=1
 //   stderr:
@@ -105,7 +105,7 @@ int main(int argc, char **argv) {
     assert(pc < prog_len);
     yk_mt_control_point(mt, locs[pc]);
     int bc = prog[pc];
-    fprintf(stderr, "pc=%d, mem=%d\n", pc, mem);
+    //fprintf(stderr, "pc=%d, mem=%d\n", pc, mem);
     switch (bc) {
     case NOP:
       pc++;

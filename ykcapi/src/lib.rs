@@ -51,6 +51,7 @@ pub extern "C" fn __ykrt_control_point(
     ctrlp_vars: *mut c_void,
     // Opaque pointer in which to store the result of the control point's caller's return value as
     // interpreted by the stopgap interpreter.
+    // XXX not anymore. now used to store the stack address of the bottom most frame
     returnval: *mut c_void,
 ) -> u64 {
     debug_assert!(!ctrlp_vars.is_null());
@@ -167,7 +168,16 @@ pub extern "C" fn __ykrt_reconstruct_frames(
             "pop r14",
             "pop r13",
             "pop r12",
+            "pop r11",
+            "pop r10",
+            "pop r9",
+            "pop r8",
+            "pop rdi",
+            "pop rsi",
             "pop rbx",
+            "pop rcx",
+            "pop rdx",
+            "pop rax",
             // Load new return address from stack and jump to it.
             "add rsp, 8",
             "jmp [rsp-8]",
@@ -204,12 +214,12 @@ pub extern "C" fn yk_stopgap(
     // Restore saved registers from the stack.
     let registers = Registers::from_ptr(rsp);
 
-    println!("frame address: {:?}", retvalptr);
+    //println!("frame address: {:?}", retvalptr);
 
     let mut sginterp = unsafe { SGInterp::new(activeframes, retvalptr) };
 
     // Parse the stackmap of the JIT module.
-    println!("stopgap: parse JIT stackmap");
+    //println!("stopgap: parse JIT stackmap");
     let slice = unsafe { slice::from_raw_parts(stackmap.addr as *mut u8, stackmap.length) };
     let map = StackMapParser::parse(slice).unwrap();
     let locs = map.get(&retaddr.try_into().unwrap()).unwrap();
@@ -217,7 +227,7 @@ pub extern "C" fn yk_stopgap(
     // Extract live values from the stackmap.
     // Skip first 3 locations as they don't relate to any of our live variables.
     for (i, l) in locs.iter().skip(SM_REC_HEADER).enumerate() {
-        println!("--");
+        //println!("--");
         match l {
             SMLocation::Register(reg, _size) => {
                 let _val = unsafe { registers.get(*reg) };
@@ -230,7 +240,7 @@ pub extern "C" fn yk_stopgap(
                 let addr = unsafe { registers.get(*reg) as *mut u8 };
                 let addr = unsafe { addr.offset(isize::try_from(*off).unwrap()) };
                 let aot = &aotmap[i];
-                println!("direct addr: {:?}", addr);
+                //println!("direct addr: {:?}", addr);
                 unsafe {
                     sginterp.var_init(
                         aot.bbidx,
@@ -244,7 +254,7 @@ pub extern "C" fn yk_stopgap(
             SMLocation::Indirect(reg, off, size) => {
                 let addr = unsafe { registers.get(*reg) as *mut u8 };
                 let addr = unsafe { addr.offset(isize::try_from(*off).unwrap()) };
-                println!("direct addr: {:?}", addr);
+                //println!("direct addr: {:?}", addr);
                 let v = match *size {
                     1 => unsafe { ptr::read::<u8>(addr as *mut u8) as u64 },
                     2 => unsafe { ptr::read::<u16>(addr as *mut u16) as u64 },
@@ -265,7 +275,7 @@ pub extern "C" fn yk_stopgap(
             }
             SMLocation::Constant(v) => {
                 let aot = &aotmap[i];
-                println!("const");
+                //println!("const");
                 unsafe {
                     sginterp.var_init(
                         aot.bbidx,
@@ -282,7 +292,7 @@ pub extern "C" fn yk_stopgap(
         }
     }
     let ret = sginterp.reconstruct_stackmap(retvalptr);
-    println!("RET: {}", ret);
+    //println!("RET: {}", ret);
     //let ret = unsafe { sginterp.interpret() };
     print_jit_state("exit-stopgap");
     ret

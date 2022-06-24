@@ -121,7 +121,7 @@ impl StackMapParser<'_> {
         //for (i, pinfo) in ps.drain(..).enumerate() {
         for records in recs.into_iter().rev() {
             let pinfo = ps.pop().unwrap();
-            println!("pop: {:?}", pinfo.csrs);
+            //println!("pop: {:?}", pinfo.csrs);
             smentries.push(SMEntry { pinfo, records });
         }
         Ok(smentries)
@@ -213,13 +213,13 @@ impl StackMapParser<'_> {
     fn read_prologue(&mut self, num_funcs: u32) -> Vec<PrologueInfo> {
         let mut pis = Vec::new();
         for _ in 0..num_funcs {
-            println!("Read prologue:");
+            //println!("Read prologue:");
             let hasfptr = self.read_u8();
             assert!(hasfptr == 0 || hasfptr == 1);
-            println!("hasptr: {}", hasfptr);
+            //println!("hasptr: {}", hasfptr);
             self.read_u8(); // Padding
             let numspills = self.read_u32();
-            println!("numspills: {}", numspills);
+            //println!("numspills: {}", numspills);
 
             let mut v = Vec::new();
             for _ in 0..numspills {
@@ -227,7 +227,7 @@ impl StackMapParser<'_> {
                 self.read_u16(); // Padding
                 let off = self.read_i32();
                 v.push((reg, off));
-                println!("Spill: {} {}", reg, off);
+                //println!("Spill: {} {}", reg, off);
             }
             let pi = PrologueInfo { hasfp: hasfptr != 0, csrs: v };
             pis.push(pi);
