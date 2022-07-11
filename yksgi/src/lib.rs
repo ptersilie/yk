@@ -207,7 +207,7 @@ impl SGInterp {
         //println!("JUST BEFORE =======================================================");
 
         // Create MMap
-        let mut memsize: usize = 14 * 8; // Reserve space for register recovery.
+        let mut memsize: usize = 15 * 8; // Reserve space for register recovery.
         // Collect stackmaps
         let mut smaps = Vec::new();
 
@@ -283,6 +283,12 @@ impl SGInterp {
             }
 
             prevframe = nextframe;
+
+            // Set RBP to this frames RBP.
+            if pinfo.hasfp {
+                registers[6] = nextframe as u64;
+            }
+
             // The next frame's stack is the current frame addr - the current frame's size - 8
             // bytes for the return address.
             nextframe = unsafe { prevframe.offset(-isize::try_from(rec.size).unwrap() - 8) };
@@ -333,6 +339,8 @@ impl SGInterp {
                         match size {
                             4 => {
                                 let dval = unsafe { ptr::read(val as *mut u32) };
+                                let xval = unsafe { ptr::read(val as *mut u64) };
+                                //println!("Peek: {:x}", xval);
                                 //println!("Write {:x} to RBP {} = {:?}", dval, off, temp);
                                 unsafe { ptr::write(temp as *mut u32, dval as u32) };
                             }
@@ -425,7 +433,7 @@ impl SGInterp {
         //}
 
         // Write active registers
-        for reg in [0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13, 14, 15] {
+        for reg in [0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15] {
             rsp = unsafe { rsp.offset(-8) };
             unsafe {
                 //println!("Write register {} ({}) to offset {:?}", reg, registers[reg], rsp);

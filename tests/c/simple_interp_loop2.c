@@ -1,5 +1,5 @@
 // Run-time:
-//   env-var: YKD_PRINT_IR=aot
+//   env-var: YKD_PRINT_IR=jit-pre-opt
 //   env-var: YKD_SERIALISE_COMPILATION=1
 //   env-var: YKD_PRINT_JITSTATE=1
 //   stderr:
@@ -11,7 +11,7 @@
 //     jit-state: stop-tracing
 //     --- Begin jit-pre-opt ---
 //     ...
-//     define i8 @__yk_compiled_trace_0(%YkCtrlPointVars* %0, i64* %1, i64 %2, i32* %3) {
+//     define i64 @__yk_compiled_trace_0(%YkCtrlPointVars* %0, i64* %1, i64 %2, i64 %3) {
 //       ...
 //       %{{fptr}} = getelementptr %YkCtrlPointVars, %YkCtrlPointVars* %0, i32 0, i32 0...
 //       %{{load}} = load...
@@ -24,8 +24,8 @@
 //
 //     {{guard-fail-bb}}:...
 //       ...
-//       %{{deoptret}} = call i8 (...) @llvm.experimental.deoptimize.i8(...
-//       ret i8 %{{deoptret}}
+//       %{{deoptret}} = call i64 (...) @llvm.experimental.deoptimize.i64(...
+//       ret i64 %{{deoptret}}
 //     ...
 //
 //     {{restart-bb}}:...
@@ -33,7 +33,7 @@
 //       %{{fptr2}} = getelementptr %YkCtrlPointVars, %YkCtrlPointVars* %0, i32 0, i32 0...
 //       store...
 //       ...
-//       ret i8 0
+//       ret i64 1
 //     }
 //     ...
 //     --- End jit-pre-opt ---
@@ -53,8 +53,8 @@
 //     pc=2, mem=1
 //     pc=3, mem=0
 //     jit-state: enter-stopgap
-//     ...
 //     jit-state: exit-stopgap
+//     jit-state: exit-jit-code
 //     pc=4, mem=0
 //     pc=5, mem=0
 
@@ -84,7 +84,7 @@ int main(int argc, char **argv) {
   size_t prog_len = sizeof(prog) / sizeof(prog[0]);
 
   YkLocation loop_loc = yk_location_new();
-  YkLocation *locs[prog_len];
+  YkLocation **locs = malloc(6 * 8);
   for (int i = 0; i < prog_len; i++)
     if (i == 0)
       locs[i] = &loop_loc;
@@ -105,7 +105,7 @@ int main(int argc, char **argv) {
     assert(pc < prog_len);
     yk_mt_control_point(mt, locs[pc]);
     int bc = prog[pc];
-    //fprintf(stderr, "pc=%d, mem=%d\n", pc, mem);
+    fprintf(stderr, "pc=%d, mem=%d\n", pc, mem);
     switch (bc) {
     case NOP:
       pc++;

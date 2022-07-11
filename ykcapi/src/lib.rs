@@ -172,6 +172,7 @@ pub extern "C" fn __ykrt_reconstruct_frames(
             "pop r10",
             "pop r9",
             "pop r8",
+            "pop rbp",
             "pop rdi",
             "pop rsi",
             "pop rbx",

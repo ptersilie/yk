@@ -12,6 +12,7 @@
 //     jit-state: enter-stopgap
 //     ...
 //     jit-state: exit-stopgap
+//     jit-state: exit-jit-code
 //  stdout:
 //     ...
 //     i: 5 ret: 9
