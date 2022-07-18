@@ -151,18 +151,24 @@ pub extern "C" fn __ykrt_reconstruct_frames(
 ) {
     unsafe {
         asm!(
-            // Move size of new stack into rdx.
+            // The first 8 bytes of the new frames is the size of the map, needed for copying it
+            // over. Move it into rdx.
             "mov rdx, [rdi]",
-            // Then adjust the address to where the stack actually starts.
+            // Then adjust the address to where the new stack actually starts.
             "add rdi, 8",
             // Make space for the new stack, but use 8 bytes less in order to overwrite this
             // function's return address since we won't be returning there.
             "add rsp, 8",
             "sub rsp, rdx",
             // Copy over the new stack frames.
-            "mov rsi, rdi",
-            "mov rdi, rsp",
+            "mov rsi, rdi", // 2nd arg: src
+            "mov rdi, rsp", // 1st arg: dest
             "call memcpy",
+            // Now move the source (i.e. the heap allocated franes) into the first argument and its
+            // size into the second. Then free the memory.
+            "mov rdi, rsi",
+            "mov rsi, rdx",
+            "call munmap",
             // Restore callee saved registers.
             "pop r15",
             "pop r14",

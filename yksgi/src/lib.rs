@@ -12,7 +12,6 @@ use std::ptr;
 use std::slice;
 use std::{env, fs};
 use std::io::Write;
-use memmap2;
 use object::{Object, ObjectSection};
 use yksmp::{Location as SMLocation, StackMapParser};
 use capstone::prelude::*;
@@ -248,12 +247,14 @@ impl SGInterp {
 
         // Now that we've calculated the stacks size, reserve space for it.
         //println!("Create stack of size {}", memsize);
-        let mut mmap = memmap2::MmapMut::map_anon(memsize).unwrap();
-        let mut ptr = mmap.as_mut().as_ptr();
-
+        let mmap = unsafe {
+            libc::mmap(std::ptr::null_mut(), memsize, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_PRIVATE | libc::MAP_ANONYMOUS, -1, 0)
+        };
+        let ptr = mmap;
 
         let layout = self.module.datalayout();
 
+        // Stack grows downwards, so needs to be written this way, so we start at the end.
         // We need to recreate stack from the bottom up, so spilled registers have the correct
         // value at the time they are pushed to the stack. This means we need to write to the mmap
         // from the back.
@@ -456,11 +457,8 @@ impl SGInterp {
         //}
 
 
-        mmap.flush().expect("Lots of poop.");
-        let rtnptr = mmap.as_ref().as_ptr();
-        std::mem::forget(mmap);
-
-
+        unsafe { libc::mprotect(mmap, memsize, libc::PROT_READ) };
+        let rtnptr = mmap;
 
         // We got:
         //    SM: JIT Value -> native value
