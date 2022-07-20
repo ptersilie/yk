@@ -124,6 +124,7 @@ struct FrameInfo {
   size_t BBIdx;
   size_t InstrIdx;
   StringRef Fname;
+  CallBase *SMCall;
 };
 
 /// Extract all live variables that need to be passed into the control point.
@@ -241,6 +242,11 @@ class JITModBuilder {
   // name, and stackframe index of the corresponding AOT instruction.
   std::map<Value *, std::tuple<size_t, size_t, Instruction *, size_t>> AOTMap;
 
+  // The last seen call to llvm.exerpimental.stackmap. We use this to keep
+  // track of all live variables in AOT in each frame. Matching those to live
+  // JIT variables tells us which variables need to be deoptimised.
+  CallBase *LastSMCall;
+
   Value *getMappedValue(Value *V) {
     if (VMap.find(V) != VMap.end()) {
       return VMap[V];
@@ -334,7 +340,7 @@ class JITModBuilder {
         }
       }
       ActiveFrames.push_back(
-          {CurBBIdx, CurInstrIdx, CI->getFunction()->getName()});
+          {CurBBIdx, CurInstrIdx, CI->getFunction()->getName(), LastSMCall});
       CallDepth += 1;
     }
   }
@@ -367,7 +373,7 @@ class JITModBuilder {
 
     // Get/create the guard failure and success blocks.
     BasicBlock *FailBB = getGuardFailureBlock(
-        JITFunc, {CurBBIdx, CurInstrIdx, I->getFunction()->getName()});
+        JITFunc, {CurBBIdx, CurInstrIdx, I->getFunction()->getName(), LastSMCall});
     BasicBlock *SuccBB = BasicBlock::Create(Context, "", JITFunc);
 
     // Insert the guard, using the original AOT branch condition for now.
@@ -396,7 +402,7 @@ class JITModBuilder {
     // Get/create the guard failure and success blocks.
     LLVMContext &Context = JITMod->getContext();
     BasicBlock *FailBB = getGuardFailureBlock(
-        JITFunc, {CurBBIdx, CurInstrIdx, I->getFunction()->getName()});
+        JITFunc, {CurBBIdx, CurInstrIdx, I->getFunction()->getName(), LastSMCall});
     BasicBlock *SuccBB = BasicBlock::Create(Context, "", JITFunc);
 
     // Determine which switch case the trace took.
@@ -557,20 +563,10 @@ class JITModBuilder {
     BasicBlock *GuardFailBB = BasicBlock::Create(Context, "guardfail", JITFunc);
     IRBuilder<> FailBuilder(GuardFailBB);
 
-    // Find live variables.
-    BasicBlock *CurrentBB = Builder.GetInsertBlock();
-    Instruction *CurrentInst = &CurrentBB->back();
-    DominatorTree DT(*JITFunc);
-    std::vector<Value *> LiveVals =
-        getLiveVars(DT, CurrentInst, AOTMap, CallDepth);
-    // Naturally the current instruction is live too but wasn't included due
-    // to the way DominatorTree works.
-    LiveVals.push_back(CurrentInst);
-
     // Add the control point struct to the live variables we pass into the
     // `deoptimize` call so the stopgap interpreter can access it.
     Value *YKCPArg = JITFunc->getArg(JITFUNC_ARG_INPUTS_STRUCT_IDX);
-    LiveVals.push_back(YKCPArg);
+    //LiveVals.push_back(YKCPArg);
     std::tuple<size_t, size_t, Instruction *, size_t> YkCPAlloca =
         getYkCPAlloca();
     AOTMap[YKCPArg] = YkCPAlloca;
@@ -594,8 +590,24 @@ class JITModBuilder {
     AllocaInst *ActiveFrameVec = FailBuilder.CreateAlloca(
         ActiveFrameSTy,
         ConstantInt::get(PointerSizedIntTy, ActiveFrames.size()));
+
+    std::vector<Value *> LiveVariables;
     for (size_t I = 0; I < ActiveFrames.size(); I++) {
       FrameInfo FI = ActiveFrames[I];
+
+      // Read live AOT variables from stackmap calls and match them to
+      // variables in the JIT so we they can be optimised.
+      CallBase *SMC = FI.SMCall;
+      for (size_t Idx = 2; Idx < SMC->arg_size(); Idx++) {
+        Value *Arg = SMC->getArgOperand(Idx);
+        if (VMap.find(Arg) != VMap.end()) {
+          if (Arg == NewControlPointCall) {
+            continue;
+          }
+          Value *JITArg = VMap[Arg];
+          LiveVariables.push_back(JITArg);
+        }
+      }
 
       // Create GEP instructions to get pointers into the fields of the
       // individual frames inside the ActiveFrameVec vector. The first index
@@ -641,17 +653,14 @@ class JITModBuilder {
         StructType::get(Context, {PointerSizedIntTy, PointerSizedIntTy,
                                   Int8PtrTy, PointerSizedIntTy});
     AllocaInst *AOTLocVec = FailBuilder.CreateAlloca(
-        AOTLocTy, ConstantInt::get(PointerSizedIntTy, LiveVals.size()));
+        AOTLocTy, ConstantInt::get(PointerSizedIntTy, LiveVariables.size()));
     std::map<std::string, Value *> FuncPtrMap;
-    for (size_t I = 0; I < LiveVals.size(); I++) {
-      Value *Live = LiveVals[I];
+    for (size_t I = 0; I < LiveVariables.size(); I++) {
+      Value *Live = LiveVariables[I];
       std::tuple<size_t, size_t, Instruction *, size_t> Entry = AOTMap[Live];
-      //errs() << "AOT/LIVE MAPPING:";
-      //Live->dump();
       size_t BBIdx = std::get<0>(Entry);
       size_t InstrIdx = std::get<1>(Entry);
       Instruction *AOTVar = std::get<2>(Entry);
-      //AOTVar->dump();
       size_t StackFrameIdx = std::get<3>(Entry);
       auto iter = FuncPtrMap.find(AOTVar->getFunction()->getName().data());
       Value *FPtr;
@@ -695,7 +704,7 @@ class JITModBuilder {
         VecLenStructTy, AOTLocs,
         {ConstantInt::get(PointerSizedIntTy, 0), ConstantInt::get(Int32Ty, 1)});
     FailBuilder.CreateStore(
-        ConstantInt::get(PointerSizedIntTy, LiveVals.size()), GEP);
+        ConstantInt::get(PointerSizedIntTy, LiveVariables.size()), GEP);
 
     // Store the stackmap address and length in a separate struct to save
     // arguments.
@@ -716,7 +725,7 @@ class JITModBuilder {
     Function *DeoptInt = Intrinsic::getDeclaration(
         JITFunc->getParent(), Intrinsic::experimental_deoptimize, {retty});
     OperandBundleDef ob =
-        OperandBundleDef("deopt", (ArrayRef<Value *>)LiveVals);
+        OperandBundleDef("deopt", (ArrayRef<Value *>)LiveVariables);
     // We already passed the stackmap address and size into the trace
     // function so pass them on to the __llvm_deoptimize call.
     Value *Ret = CallInst::Create(DeoptInt,
@@ -1291,6 +1300,7 @@ public:
               //Value *SMID = (cast<CallBase>(I))->getArgOperand(0);
               //errs() << "FOUND STACKAMP";
               //SMID->dump();
+              LastSMCall = cast<CallBase>(I);
               continue;
             }
 
