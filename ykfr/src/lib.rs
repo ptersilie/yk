@@ -1,4 +1,3 @@
-use capstone::prelude::*;
 use llvm_sys::{core::*, target::LLVMABISizeOfType};
 use object::{Object, ObjectSection};
 use std::{
@@ -70,7 +69,11 @@ impl Frame {
 
 fn get_stackmap_call(pc: Value) -> Value {
     debug_assert!(pc.is_instruction());
-    let sm = unsafe { Value::new(LLVMGetPreviousInstruction(pc.get())) };
+    let sm = if pc.is_call() {
+        unsafe { Value::new(LLVMGetNextInstruction(pc.get())) }
+    } else {
+        unsafe { Value::new(LLVMGetPreviousInstruction(pc.get())) }
+    };
     if cfg!(debug_assertions) {
         // If we are in debug mode, make sure this is indeed always the stackmap call.
         assert!(sm.is_call());
@@ -125,17 +128,6 @@ impl FrameReconstructor {
         let object = object::File::parse(&*exemmap).unwrap();
         let sec = object.section_by_name(".llvm_stackmaps").unwrap();
         let text = object.section_by_name(".text").unwrap();
-
-        // Create a capstone dissassembler so we can figure out the size of the instruction we
-        // return to in order to adjust the return address in our reconstructed stackmap.
-        // FIXME: Find a way to move this into AOT (e.g. maybe add this information to stackmaps).
-        let cs = Capstone::new()
-            .x86()
-            .mode(arch::x86::ArchMode::Mode64)
-            .syntax(arch::x86::ArchSyntax::Att)
-            .detail(true)
-            .build()
-            .expect("Failed to create Capstone object");
 
         // Vec holding currently active register values.
         let mut registers = vec![0; 16];
@@ -303,19 +295,7 @@ impl FrameReconstructor {
                         // Direct locations are always be in regards to RBP.
                         assert_eq!(*reg, 6);
                         let temp = unsafe { rbp.offset(isize::try_from(*off).unwrap()) };
-                        match size {
-                            4 => {
-                                let dval = unsafe { ptr::read(val as *mut u32) };
-                                unsafe { ptr::write(temp as *mut u32, dval as u32) };
-                            }
-                            8 => {
-                                let dval = unsafe { ptr::read(val as *mut u64) };
-                                unsafe { ptr::write(temp as *mut u64, dval) };
-                            }
-                            _ => {
-                                todo!()
-                            }
-                        }
+                        unsafe { libc::memcpy(temp, val as *const c_void, size as usize) };
                     }
                     SMLocation::Indirect(_reg, _off, _size) => {
                         todo!()
@@ -346,18 +326,8 @@ impl FrameReconstructor {
             // to re-execute the instruction (e.g. icmp, test) in order to set the correct flags
             // for the following jump instruction.
             rsp = unsafe { rsp.sub(USIZEOF_POINTER) };
-            let instr_offset = usize::try_from(rec.offset - text.address()).unwrap();
-            let instrs = cs
-                .disasm_count(&text.data().unwrap()[instr_offset..], 0, 1)
-                .unwrap();
-            let instr = instrs.first().unwrap();
-            let offset = if instr.mnemonic() == Some("callq") {
-                rec.offset + u64::try_from(instr.len()).unwrap()
-            } else {
-                rec.offset
-            };
             unsafe {
-                ptr::write(rsp as *mut u64, offset);
+                ptr::write(rsp as *mut u64, rec.offset);
             }
         }
 
