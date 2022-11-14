@@ -263,10 +263,14 @@ impl FrameReconstructor {
             // Now write all live variables to the new stack in the order they are listed in the
             // AOT stackmap call.
             let smcall = get_stackmap_call(frame.pc);
+            println!("smcall: {:?}", smcall.as_str());
+            println!("write stackmap locations");
             for (j, lv) in rec.live_vars.iter().enumerate() {
                 // Adjust the operand index by 2 to skip stackmap ID and shadow bytes.
                 let op = smcall.get_operand(u32::try_from(j + 2).unwrap());
+                println!("op: {:?}", op.as_str());
                 let val = frame.get(&op).unwrap().val;
+                println!("val: {:?}", val);
                 let l = if lv.len() == 1 {
                     lv.get(0).unwrap()
                 } else {
@@ -386,10 +390,13 @@ impl FrameReconstructor {
             // the control point. See `get_aot_original` for more details.
             None
         };
+        println!("var init");
+        println!("instr {:?}", instr.as_str());
         let ty = instr.get_type();
         let value = SGValue::new(val, ty);
         self.frames.get_mut(sfidx).unwrap().add(instr, value);
         if let Some(v) = orgaot {
+            println!("org {:?}", v.as_str());
             self.frames.get_mut(sfidx).unwrap().add(v, value);
         }
     }

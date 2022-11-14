@@ -757,7 +757,10 @@ class JITModBuilder {
   }
 
   std::tuple<size_t, size_t, Instruction *, size_t> getYkCPAlloca() {
+    errs() << "getYKCPAlloca\n";
+    TraceInputs->dump();
     Function *F = ((Instruction *)TraceInputs)->getFunction();
+    F->dump();
     BasicBlock &BB = F->getEntryBlock();
     size_t Idx = 0;
     for (auto I = BB.begin(); I != BB.end(); I++) {
@@ -927,12 +930,16 @@ class JITModBuilder {
     // Fix initialisers/referrers for copied global variables.
     // FIXME Do we also need to copy Linkage, MetaData, Comdat?
     for (GlobalVariable *G : cloned_globals) {
+      errs() << "clone global:";
+      G->dump();
       GlobalVariable *NewGV = cast<GlobalVariable>(VMap[G]);
       if (G->isDeclaration())
         continue;
 
-      if (G->hasInitializer())
+      if (G->hasInitializer()) {
+        errs() << "hasInit\n";
         NewGV->setInitializer(MapValue(G->getInitializer(), VMap));
+      }
     }
 
     // Ensure that the JITModule has a `!llvm.dbg.cu`.
@@ -1105,6 +1112,7 @@ class JITModBuilder {
     User *CallSite = F->user_back();
     CallInst *CPCI = cast<CallInst>(CallSite);
     assert(CPCI->arg_size() == YK_CONTROL_POINT_NUM_ARGS);
+    CPCI->dump();
 
     Value *Inputs = CPCI->getArgOperand(YK_CONTROL_POINT_ARG_VARS_IDX);
 #ifndef NDEBUG
