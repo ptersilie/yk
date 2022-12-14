@@ -263,14 +263,10 @@ impl FrameReconstructor {
             // Now write all live variables to the new stack in the order they are listed in the
             // AOT stackmap call.
             let smcall = get_stackmap_call(frame.pc);
-            println!("smcall: {:?}", smcall.as_str());
-            println!("write stackmap locations");
             for (j, lv) in rec.live_vars.iter().enumerate() {
                 // Adjust the operand index by 2 to skip stackmap ID and shadow bytes.
                 let op = smcall.get_operand(u32::try_from(j + 2).unwrap());
-                println!("op: {:?}", op.as_str());
                 let val = frame.get(&op).unwrap().val;
-                println!("val: {:?}", val);
                 let l = if lv.len() == 1 {
                     lv.get(0).unwrap()
                 } else {
@@ -301,8 +297,34 @@ impl FrameReconstructor {
                         let temp = unsafe { rbp.offset(isize::try_from(*off).unwrap()) };
                         unsafe { libc::memcpy(temp, val as *const c_void, size as usize) };
                     }
-                    SMLocation::Indirect(_reg, _off, _size) => {
-                        todo!()
+                    SMLocation::Indirect(reg, off, _) => {
+                        if i == 0 {
+                            // skip first frame
+                            continue;
+                        }
+                        todo!();
+                        //println!("Indirect: {} {}", reg, off);
+                        // Get pointer stored at indirect location
+                        // Then write to that pointer.
+                        assert_eq!(*reg, 6);
+                        let eltype = unsafe { LLVMTypeOf(op.get()) };
+                        let size = unsafe { LLVMABISizeOfType(layout, eltype) };
+                        //if op.is_load() {
+                        //    // Stackmap entries need to be in the right order so the new
+                        //    // stack is populated correctly when we read values from it. For
+                        //    // now though we can hack around it when we know we've got a
+                        //    // load instrution.
+                        //    let ptr = op.get_operand(1);
+                        //    let ptrval = frame.get(&ptr).unwrap().val;
+                        //    unsafe { libc::memcpy(ptrval as *mut c_void, &val, size as usize) };
+                        //} else {
+                        //    todo!()
+                        //}
+                        // XXX do we still need this!? probably
+                        // but why is indirect same as direct
+                        let temp = unsafe { rbp.offset(isize::try_from(*off).unwrap()) };
+                        unsafe { libc::memcpy(temp, val as *const c_void, size as usize) };
+                        //todo!()
                     }
                     SMLocation::Constant(_v) => {
                         todo!()
@@ -390,13 +412,10 @@ impl FrameReconstructor {
             // the control point. See `get_aot_original` for more details.
             None
         };
-        println!("var init");
-        println!("instr {:?}", instr.as_str());
         let ty = instr.get_type();
         let value = SGValue::new(val, ty);
         self.frames.get_mut(sfidx).unwrap().add(instr, value);
         if let Some(v) = orgaot {
-            println!("org {:?}", v.as_str());
             self.frames.get_mut(sfidx).unwrap().add(v, value);
         }
     }
