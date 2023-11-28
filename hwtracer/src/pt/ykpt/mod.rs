@@ -321,7 +321,7 @@ impl<'t> YkPTBlockIterator<'t> {
                                 .unwrap()
                                 .to_str()
                                 .unwrap()
-                                .contains("emu")
+                                .contains("__emutls_get_address")
                             {
                                 // FIXME: doe we also need to detect the TLS wrapper in the case
                                 // where we do statically know the call target address?

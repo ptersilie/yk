@@ -851,7 +851,7 @@ class JITModBuilder {
         }
         if (VMap.find(Arg) != VMap.end()) {
           Value *JITArg = VMap[Arg];
-          if (!isa<Constant>(JITArg)) {
+          if (!isa<Constant>(JITArg) || isa<GlobalVariable>(JITArg)) {
             LiveValues.push_back({JITArg, Arg, I});
           }
         }
@@ -1194,6 +1194,12 @@ class JITModBuilder {
     for (size_t i = 0; i < AOTValsLen; i++) {
       AOTInfo Info = LiveVals[i];
       Value *V = llvm::unwrap(Info.Value);
+      if (isa<GlobalVariable>(V)) {
+        // Don't replace global variables with call arguments. There's is no
+        // need and we don't pass them into the trace, so there's no matching
+        // value in the call args anyway.
+        continue;
+      }
       Value *GEP = Builder.CreateGEP(YkCtrlPointVarsPtrTy, JITFunc->getArg(0),
                                      {ConstantInt::get(Int32Ty, i)});
       Value *Load = Builder.CreateLoad(V->getType(), GEP);
