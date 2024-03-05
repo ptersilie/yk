@@ -234,7 +234,11 @@ pub(crate) enum HotLocationKind {
     Tracing,
     /// While executing JIT compiled code, a guard failed often enough for us to want to generate a
     /// side trace for this HotLocation.
-    SideTracing(Arc<dyn CompiledTrace>, SideTraceInfo, Arc<dyn CompiledTrace>),
+    SideTracing(
+        Arc<dyn CompiledTrace>,
+        SideTraceInfo,
+        Arc<dyn CompiledTrace>,
+    ),
 }
 
 /// When a [HotLocation] has failed to compile a valid trace, should the [HotLocation] be tried

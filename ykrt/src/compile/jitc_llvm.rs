@@ -7,6 +7,7 @@ use crate::{
     mt::{SideTraceInfo, MT},
     trace::{AOTTraceIterator, TraceAction},
 };
+use libc::c_void;
 use object::{Object, ObjectSection};
 use parking_lot::Mutex;
 #[cfg(unix)]
@@ -15,14 +16,11 @@ use std::{
     collections::HashMap,
     env,
     ffi::{c_char, c_int},
-    fmt,
-    ptr,
-    slice,
+    fmt, ptr, slice,
     sync::{Arc, LazyLock, Weak},
 };
 use tempfile::NamedTempFile;
 use ykaddr::obj::SELF_BIN_MMAP;
-use libc::c_void;
 use yksmp::LiveVar;
 use yksmp::StackMapParser;
 
@@ -210,7 +208,12 @@ impl Compiler for JITCLLVM {
             // recoverable/temporary. So for now we say any error is temporary.
             Err(CompilationError::Temporary("llvm backend error".into()))
         } else {
-            Ok(Arc::new(LLVMCompiledTrace::new(mt, ret, di_tmp, Arc::downgrade(&hl))))
+            Ok(Arc::new(LLVMCompiledTrace::new(
+                mt,
+                ret,
+                di_tmp,
+                Arc::downgrade(&hl),
+            )))
         }
     }
 }

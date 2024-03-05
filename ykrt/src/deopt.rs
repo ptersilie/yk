@@ -419,7 +419,10 @@ unsafe extern "C" fn __ykrt_deopt(
                 let tmp: Arc<dyn CompiledTrace> = ctr.clone(); // Arc::clone doesn't work here.
                                                                //
                 println!("are we here");
-                debug_assert!(tmp.as_ref() as *const _ as *const usize == ctr.as_ref() as *const _ as *const usize);
+                debug_assert!(
+                    tmp.as_ref() as *const _ as *const usize
+                        == ctr.as_ref() as *const _ as *const usize
+                );
                 ctr.mt().side_trace(hl, sti, tmp);
             }
         }

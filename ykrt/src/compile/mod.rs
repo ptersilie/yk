@@ -9,7 +9,8 @@ use parking_lot::Mutex;
 use std::slice;
 use std::{
     collections::HashMap,
-    env, fmt::Debug,
+    env,
+    fmt::Debug,
     sync::{
         atomic::{AtomicU32, Ordering},
         Arc, Weak,
@@ -97,7 +98,7 @@ impl Guard {
 /// A trace compiled into machine code. Note that these are passed around as raw pointers and
 /// potentially referenced by multiple threads so, once created, instances of this struct can only
 /// be updated if a lock is held or a field is atomic.
-pub(crate) trait CompiledTrace: Send+Sync+Debug {
+pub(crate) trait CompiledTrace: Send + Sync + Debug {
     fn guard(&self, id: GuardId) -> &Guard;
     fn aotvals(&self) -> *const c_void;
     fn entry(&self) -> *const c_void;
@@ -125,7 +126,6 @@ impl CompiledTrace for DummyCompiledTrace {
         todo!()
     }
 }
-
 
 #[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]

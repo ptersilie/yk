@@ -249,7 +249,11 @@ impl MT {
                     assert_ne!(ctr.entry() as *const (), std::ptr::null());
                     let f = mem::transmute::<
                         _,
-                        unsafe extern "C" fn(*mut c_void, *const dyn CompiledTrace, *const c_void) -> !,
+                        unsafe extern "C" fn(
+                            *mut c_void,
+                            *const dyn CompiledTrace,
+                            *const c_void,
+                        ) -> !,
                     >(ctr.entry());
                     // FIXME: Calling this function overwrites the current (Rust) function frame,
                     // rather than unwinding it. https://github.com/ykjit/yk/issues/778.
@@ -668,7 +672,11 @@ enum TransitionControlPoint {
     Execute(Arc<dyn CompiledTrace>),
     StartTracing,
     StopTracing(Arc<Mutex<HotLocation>>),
-    StopSideTracing(Arc<Mutex<HotLocation>>, SideTraceInfo, Arc<dyn CompiledTrace>),
+    StopSideTracing(
+        Arc<Mutex<HotLocation>>,
+        SideTraceInfo,
+        Arc<dyn CompiledTrace>,
+    ),
 }
 
 /// What action should a caller of [MT::transition_guard_failure] take?
@@ -697,9 +705,9 @@ impl PartialEq for TransitionControlPoint {
 mod tests {
     extern crate test;
     use super::*;
+    use crate::compile::DummyCompiledTrace;
     use std::{hint::black_box, sync::atomic::AtomicU64};
     use test::bench::Bencher;
-    use crate::compile::DummyCompiledTrace;
 
     #[test]
     fn basic_transitions() {
