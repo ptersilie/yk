@@ -5,7 +5,7 @@ use crate::frame::{BitcodeSection, FrameReconstructor, __yktracec_get_aot_module
 #[cfg(feature = "yk_jitstate_debug")]
 use crate::print_jit_state;
 use crate::{
-    compile::{CompiledTrace, GuardId},
+    compile::{jitc_llvm::LLVMCompiledTrace, CompiledTrace, GuardId},
     mt::SideTraceInfo,
     ykstats::TimingState,
 };
@@ -109,7 +109,7 @@ compile_error!("__llvm_deoptimize() not yet implemented for this platform");
 #[naked]
 #[no_mangle]
 extern "C" fn __llvm_deoptimize(
-    ctr: *const CompiledTrace,
+    ctr: *const LLVMCompiledTrace,
     frameaddr: *mut c_void,
     aotvals: *const c_void,
     actframes: *const c_void,
@@ -163,7 +163,7 @@ extern "C" fn __llvm_deoptimize(
 /// Struct storing information we need to pass via the `LLVMOrcThreadSafeModuleWithModuleDo`
 /// function.
 struct ReconstructInfo<'a> {
-    ctr: Arc<CompiledTrace>,
+    ctr: Arc<LLVMCompiledTrace>,
     frameaddr: *mut c_void,
     aotvals: &'a LiveAOTVals,
     actframes: &'a CVec,
@@ -285,7 +285,7 @@ extern "C" fn ts_reconstruct(ctx: *mut c_void, _module: LLVMModuleRef) -> LLVMEr
 #[cfg(target_arch = "x86_64")]
 #[no_mangle]
 unsafe extern "C" fn __ykrt_deopt(
-    ctr: *const CompiledTrace,
+    ctr: *const LLVMCompiledTrace,
     frameaddr: *mut c_void,
     aotvals: &LiveAOTVals,
     actframes: &CVec,
@@ -351,7 +351,7 @@ unsafe extern "C" fn __ykrt_deopt(
             // Execute the side trace.
             let f = mem::transmute::<
                 _,
-                unsafe extern "C" fn(*mut c_void, *const CompiledTrace, *const c_void) -> !,
+                unsafe extern "C" fn(*mut c_void, *const dyn CompiledTrace, *const c_void) -> !,
             >(st.entry());
             (*ctr).mt().stats.timing_state(TimingState::JitExecuting);
 
@@ -416,7 +416,11 @@ unsafe extern "C" fn __ykrt_deopt(
                     aotvalslen: aotvals.length,
                     guardid,
                 };
-                ctr.mt().side_trace(hl, sti, Arc::clone(&ctr));
+                let tmp: Arc<dyn CompiledTrace> = ctr.clone(); // Arc::clone doesn't work here.
+                                                               //
+                println!("are we here");
+                debug_assert!(tmp.as_ref() as *const _ as *const usize == ctr.as_ref() as *const _ as *const usize);
+                ctr.mt().side_trace(hl, sti, tmp);
             }
         }
     }

@@ -249,7 +249,7 @@ impl MT {
                     assert_ne!(ctr.entry() as *const (), std::ptr::null());
                     let f = mem::transmute::<
                         _,
-                        unsafe extern "C" fn(*mut c_void, *const CompiledTrace, *const c_void) -> !,
+                        unsafe extern "C" fn(*mut c_void, *const dyn CompiledTrace, *const c_void) -> !,
                     >(ctr.entry());
                     // FIXME: Calling this function overwrites the current (Rust) function frame,
                     // rather than unwinding it. https://github.com/ykjit/yk/issues/778.
@@ -481,7 +481,7 @@ impl MT {
         self: &Arc<Self>,
         hl: Arc<Mutex<HotLocation>>,
         sti: SideTraceInfo,
-        parent: Arc<CompiledTrace>,
+        parent: Arc<dyn CompiledTrace>,
     ) -> TransitionGuardFailure {
         THREAD_MTTHREAD.with(|mtt| {
             // This thread should not be tracing anything.
@@ -508,7 +508,7 @@ impl MT {
         self: &Arc<Self>,
         trace_iter: (Box<dyn AOTTraceIterator>, Box<[usize]>),
         hl_arc: Arc<Mutex<HotLocation>>,
-        sidetrace: Option<(SideTraceInfo, Arc<CompiledTrace>)>,
+        sidetrace: Option<(SideTraceInfo, Arc<dyn CompiledTrace>)>,
     ) {
         self.stats.trace_recorded_ok();
         let mt = Arc::clone(self);
@@ -537,10 +537,10 @@ impl MT {
                             // then `hl_arc.kind` is `Compiled`.
                             let ctr = sidetrace.map(|x| x.1).unwrap();
                             let guard = ctr.guard(guardid.unwrap());
-                            guard.setct(Arc::new(ct));
+                            guard.setct(ct);
                         }
                         _ => {
-                            hl.kind = HotLocationKind::Compiled(Arc::new(ct));
+                            hl.kind = HotLocationKind::Compiled(ct);
                         }
                     }
                     mt.stats.trace_compiled_ok();
@@ -576,7 +576,7 @@ impl MT {
         self: &Arc<Self>,
         hl: Arc<Mutex<HotLocation>>,
         sti: SideTraceInfo,
-        parent: Arc<CompiledTrace>,
+        parent: Arc<dyn CompiledTrace>,
     ) {
         match self.transition_guard_failure(hl, sti, parent) {
             TransitionGuardFailure::NoAction => todo!(),
@@ -665,10 +665,10 @@ impl MTThread {
 #[derive(Debug)]
 enum TransitionControlPoint {
     NoAction,
-    Execute(Arc<CompiledTrace>),
+    Execute(Arc<dyn CompiledTrace>),
     StartTracing,
     StopTracing(Arc<Mutex<HotLocation>>),
-    StopSideTracing(Arc<Mutex<HotLocation>>, SideTraceInfo, Arc<CompiledTrace>),
+    StopSideTracing(Arc<Mutex<HotLocation>>, SideTraceInfo, Arc<dyn CompiledTrace>),
 }
 
 /// What action should a caller of [MT::transition_guard_failure] take?
@@ -699,6 +699,7 @@ mod tests {
     use super::*;
     use std::{hint::black_box, sync::atomic::AtomicU64};
     use test::bench::Bencher;
+    use crate::compile::DummyCompiledTrace;
 
     #[test]
     fn basic_transitions() {
@@ -728,7 +729,7 @@ mod tests {
                     HotLocationKind::Compiling
                 ));
                 loc.hot_location().unwrap().lock().kind =
-                    HotLocationKind::Compiled(Arc::new(CompiledTrace::new_testing()));
+                    HotLocationKind::Compiled(Arc::new(DummyCompiledTrace::new()));
             }
             _ => unreachable!(),
         }
@@ -746,7 +747,7 @@ mod tests {
             mt.transition_guard_failure(
                 loc.hot_location_arc_clone().unwrap(),
                 sti,
-                Arc::new(CompiledTrace::new_testing()),
+                Arc::new(DummyCompiledTrace::new()),
             ),
             TransitionGuardFailure::StartSideTracing
         ));
@@ -1052,7 +1053,7 @@ mod tests {
                                     ));
                                     loc.hot_location().unwrap().lock().kind =
                                         HotLocationKind::Compiled(Arc::new(
-                                            CompiledTrace::new_testing(),
+                                            DummyCompiledTrace::new(),
                                         ));
                                 }
                                 x => unreachable!("Reached incorrect state {:?}", x),
@@ -1165,7 +1166,7 @@ mod tests {
                         HotLocationKind::Compiling
                     ));
                     loc.hot_location().unwrap().lock().kind =
-                        HotLocationKind::Compiled(Arc::new(CompiledTrace::new_testing()));
+                        HotLocationKind::Compiled(Arc::new(DummyCompiledTrace::new()));
                 }
                 _ => unreachable!(),
             }
@@ -1188,7 +1189,7 @@ mod tests {
                     mt.transition_guard_failure(
                         loc1.hot_location_arc_clone().unwrap(),
                         sti,
-                        Arc::new(CompiledTrace::new_testing()),
+                        Arc::new(DummyCompiledTrace::new()),
                     ),
                     TransitionGuardFailure::StartSideTracing
                 ));
@@ -1207,7 +1208,7 @@ mod tests {
             mt.transition_guard_failure(
                 loc2.hot_location_arc_clone().unwrap(),
                 sti,
-                Arc::new(CompiledTrace::new_testing()),
+                Arc::new(DummyCompiledTrace::new()),
             ),
             TransitionGuardFailure::StartSideTracing
         ));
@@ -1267,7 +1268,7 @@ mod tests {
         ));
         if let TransitionControlPoint::StopTracing(_) = mt.transition_control_point(&loc1) {
             loc1.hot_location().unwrap().lock().kind =
-                HotLocationKind::Compiled(Arc::new(CompiledTrace::new_testing()));
+                HotLocationKind::Compiled(Arc::new(DummyCompiledTrace::new()));
         } else {
             panic!();
         }
