@@ -300,7 +300,7 @@ unsafe extern "C" fn __ykrt_deopt(
     // execution. Traces can only return via this deopt, so we can (and must) turn this back into
     // an `Arc` so it will be dropped at the end of this function. Unless, we are going to execute
     // a side-trace. In that case this function will not return and we need to drop `ctr` manually.
-    let ctr: Arc<dyn CompiledTrace> = Arc::from_raw(ctr);
+    let ctr: Arc<LLVMCompiledTrace> = Arc::from_raw(ctr);
     //let ctr: Arc<LLVMCompiledTrace> = ctr.downcast::<LLVMCompiledTrace>().unwrap();
 
     (*ctr).mt().stats.timing_state(TimingState::Deopting);

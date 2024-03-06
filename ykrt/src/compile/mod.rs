@@ -99,11 +99,20 @@ impl Guard {
 /// potentially referenced by multiple threads so, once created, instances of this struct can only
 /// be updated if a lock is held or a field is atomic.
 use std::any::Any;
-pub(crate) trait CompiledTrace: Any + Send + Sync + Debug {
+use crate::compile::jitc_llvm::LLVMCompiledTrace;
+pub(crate) trait CompiledTrace: Send + Sync + Debug {
     fn guard(&self, id: GuardId) -> &Guard;
     fn aotvals(&self) -> *const c_void;
     fn entry(&self) -> *const c_void;
-    fn exec(self: &Arc<Self>, ctrlp_vars: *mut c_void, frameaddr: *const c_void, ctr: Arc<dyn Any + Send+Sync>) -> !;
+    fn exec(
+        &self,
+        ctrlp_vars: *mut c_void,
+        frameaddr: *const c_void,
+        ctr: Arc<dyn CompiledTrace>,
+    ) -> !;
+
+    fn as_llvm(self: Arc<Self>) -> Arc<LLVMCompiledTrace>;
+    fn as_any(self: Arc<Self>) -> Arc<dyn Any>;
 }
 
 #[cfg(test)]
@@ -127,7 +136,14 @@ impl CompiledTrace for DummyCompiledTrace {
     fn aotvals(&self) -> *const c_void {
         todo!()
     }
-    fn exec(&self, _ctrlp_vars: *mut c_void, _frameaddr: *const c_void, ctr: Arc<dyn Any+Send+Sync>) -> ! {
+    fn as_llvm(self: Arc<Self>) -> Arc<LLVMCompiledTrace> { todo!() }
+    fn as_any(self: Arc<Self>) -> Arc<dyn Any> { todo!() }
+    fn exec(
+        &self,
+        _ctrlp_vars: *mut c_void,
+        _frameaddr: *const c_void,
+        ctr: Arc<dyn CompiledTrace>,
+    ) -> ! {
         todo!()
     }
 }

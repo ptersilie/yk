@@ -60,8 +60,8 @@ pub(crate) struct LLVMCompiledTrace {
     /// Reference to the HotLocation, required for side tracing.
     hl: Weak<Mutex<HotLocation>>,
 }
-    use std::any::Any;
-    use std::mem;
+use std::any::Any;
+use std::mem;
 
 impl CompiledTrace for LLVMCompiledTrace {
     fn entry(&self) -> *const c_void {
@@ -77,22 +77,33 @@ impl CompiledTrace for LLVMCompiledTrace {
         self.aotvals.0
     }
 
-    unsafe fn exec(&self, ctrlp_vars: *mut c_void, frameaddr: *const c_void, ctr: Arc<dyn Any + Send + Sync>) -> ! {
-        let b: Arc<Self> = ctr.downcast::<LLVMCompiledTrace>().unwrap();
+    fn as_llvm(self: Arc<Self>) -> Arc<LLVMCompiledTrace> {
+        self
+    }
 
-        let f = mem::transmute::<
+
+    fn as_any(self: Arc<Self>) -> Arc<dyn Any> {
+        self
+    }
+
+    fn exec(
+        &self,
+        ctrlp_vars: *mut c_void,
+        frameaddr: *const c_void,
+        ctr: Arc<dyn CompiledTrace>,
+    ) -> ! {
+        let a: Arc<Self> = ctr.as_llvm();
+        //let b: Arc<Self> = ctr.as_any().downcast_ref::<Arc<LLVMCompiledTrace>>().unwrap();
+
+        let f = unsafe { mem::transmute::<
             _,
-            unsafe extern "C" fn(
-                *mut c_void,
-                *const LLVMCompiledTrace,
-                *const c_void,
-            ) -> !,
-            >(self.entry());
+            unsafe extern "C" fn(*mut c_void, *const LLVMCompiledTrace, *const c_void) -> !,
+        >(self.entry())};
         // FIXME: Calling this function overwrites the current (Rust) function frame,
         // rather than unwinding it. https://github.com/ykjit/yk/issues/778.
         // The `Arc<CompiledTrace>` passed into the trace here will be safely dropped
         // upon deoptimisation, which is the only way to exit a trace.
-        f(ctrlp_vars, Arc::into_raw(b), frameaddr);
+        unsafe { f(ctrlp_vars, Arc::into_raw(a), frameaddr) };
     }
 }
 

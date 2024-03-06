@@ -112,7 +112,7 @@ impl std::fmt::Debug for MT {
 }
 
 use crate::frame::load_aot_stackmaps;
-    use std::any::Any;
+use std::any::Any;
 
 impl MT {
     // Create a new meta-tracer instance. Arbitrarily many of these can be created, though there
@@ -245,13 +245,11 @@ impl MT {
                 self.stats.trace_executed();
                 self.stats.timing_state(TimingState::JitExecuting);
 
-                unsafe {
                     #[cfg(feature = "yk_testing")]
                     assert_ne!(ctr.entry() as *const (), std::ptr::null());
-                    ctr.exec(ctrlp_vars, frameaddr, ctr as Arc<dyn Any + Send + Sync>);
+                    ctr.exec(ctrlp_vars, frameaddr, Arc::clone(&ctr));
                     // Arc<Any>
                     // &ctr as &Any
-                }
             }
             TransitionControlPoint::StartTracing => {
                 #[cfg(feature = "yk_jitstate_debug")]
