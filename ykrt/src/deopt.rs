@@ -282,6 +282,7 @@ extern "C" fn ts_reconstruct(ctx: *mut c_void, _module: LLVMModuleRef) -> LLVMEr
 ///      assemble a side trace.
 ///   * `rsp`: Current stack pointer. Needed to read spilled register values from the stack.
 ///   * `isswitchguard`: 1 if this guards a switch statement, 0 otherwise.
+use std::any::Any;
 #[cfg(target_arch = "x86_64")]
 #[no_mangle]
 unsafe extern "C" fn __ykrt_deopt(
@@ -299,7 +300,9 @@ unsafe extern "C" fn __ykrt_deopt(
     // execution. Traces can only return via this deopt, so we can (and must) turn this back into
     // an `Arc` so it will be dropped at the end of this function. Unless, we are going to execute
     // a side-trace. In that case this function will not return and we need to drop `ctr` manually.
-    let ctr = Arc::from_raw(ctr);
+    let ctr: Arc<dyn CompiledTrace> = Arc::from_raw(ctr);
+    //let ctr: Arc<LLVMCompiledTrace> = ctr.downcast::<LLVMCompiledTrace>().unwrap();
+
     (*ctr).mt().stats.timing_state(TimingState::Deopting);
 
     let guardid = GuardId(guardid);
@@ -428,6 +431,7 @@ unsafe extern "C" fn __ykrt_deopt(
         }
     }
 
+    dbg!(&info.nfi);
     info.nfi.unwrap()
 }
 
@@ -460,6 +464,7 @@ extern "C" fn __ykrt_reconstruct_frames(
             // Copy over the new stack frames.
             "mov rsi, rdi", // 2nd arg: src
             "mov rdi, rsp", // 1st arg: dest
+            "push $rax",
             "call memcpy",
             // Free `newframesptr`.
             "mov rdi, r12",

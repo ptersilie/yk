@@ -112,6 +112,7 @@ impl std::fmt::Debug for MT {
 }
 
 use crate::frame::load_aot_stackmaps;
+    use std::any::Any;
 
 impl MT {
     // Create a new meta-tracer instance. Arbitrarily many of these can be created, though there
@@ -247,19 +248,9 @@ impl MT {
                 unsafe {
                     #[cfg(feature = "yk_testing")]
                     assert_ne!(ctr.entry() as *const (), std::ptr::null());
-                    let f = mem::transmute::<
-                        _,
-                        unsafe extern "C" fn(
-                            *mut c_void,
-                            *const dyn CompiledTrace,
-                            *const c_void,
-                        ) -> !,
-                    >(ctr.entry());
-                    // FIXME: Calling this function overwrites the current (Rust) function frame,
-                    // rather than unwinding it. https://github.com/ykjit/yk/issues/778.
-                    // The `Arc<CompiledTrace>` passed into the trace here will be safely dropped
-                    // upon deoptimisation, which is the only way to exit a trace.
-                    f(ctrlp_vars, Arc::into_raw(ctr), frameaddr);
+                    ctr.exec(ctrlp_vars, frameaddr, ctr as Arc<dyn Any + Send + Sync>);
+                    // Arc<Any>
+                    // &ctr as &Any
                 }
             }
             TransitionControlPoint::StartTracing => {

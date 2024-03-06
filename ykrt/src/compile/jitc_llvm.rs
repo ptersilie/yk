@@ -60,6 +60,8 @@ pub(crate) struct LLVMCompiledTrace {
     /// Reference to the HotLocation, required for side tracing.
     hl: Weak<Mutex<HotLocation>>,
 }
+    use std::any::Any;
+    use std::mem;
 
 impl CompiledTrace for LLVMCompiledTrace {
     fn entry(&self) -> *const c_void {
@@ -73,6 +75,24 @@ impl CompiledTrace for LLVMCompiledTrace {
 
     fn aotvals(&self) -> *const c_void {
         self.aotvals.0
+    }
+
+    unsafe fn exec(&self, ctrlp_vars: *mut c_void, frameaddr: *const c_void, ctr: Arc<dyn Any + Send + Sync>) -> ! {
+        let b: Arc<Self> = ctr.downcast::<LLVMCompiledTrace>().unwrap();
+
+        let f = mem::transmute::<
+            _,
+            unsafe extern "C" fn(
+                *mut c_void,
+                *const LLVMCompiledTrace,
+                *const c_void,
+            ) -> !,
+            >(self.entry());
+        // FIXME: Calling this function overwrites the current (Rust) function frame,
+        // rather than unwinding it. https://github.com/ykjit/yk/issues/778.
+        // The `Arc<CompiledTrace>` passed into the trace here will be safely dropped
+        // upon deoptimisation, which is the only way to exit a trace.
+        f(ctrlp_vars, Arc::into_raw(b), frameaddr);
     }
 }
 

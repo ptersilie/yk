@@ -98,10 +98,12 @@ impl Guard {
 /// A trace compiled into machine code. Note that these are passed around as raw pointers and
 /// potentially referenced by multiple threads so, once created, instances of this struct can only
 /// be updated if a lock is held or a field is atomic.
-pub(crate) trait CompiledTrace: Send + Sync + Debug {
+use std::any::Any;
+pub(crate) trait CompiledTrace: Any + Send + Sync + Debug {
     fn guard(&self, id: GuardId) -> &Guard;
     fn aotvals(&self) -> *const c_void;
     fn entry(&self) -> *const c_void;
+    fn exec(self: &Arc<Self>, ctrlp_vars: *mut c_void, frameaddr: *const c_void, ctr: Arc<dyn Any + Send+Sync>) -> !;
 }
 
 #[cfg(test)]
@@ -123,6 +125,9 @@ impl CompiledTrace for DummyCompiledTrace {
         todo!()
     }
     fn aotvals(&self) -> *const c_void {
+        todo!()
+    }
+    fn exec(&self, _ctrlp_vars: *mut c_void, _frameaddr: *const c_void, ctr: Arc<dyn Any+Send+Sync>) -> ! {
         todo!()
     }
 }
